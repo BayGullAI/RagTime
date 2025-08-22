@@ -20,8 +20,9 @@ phases:
     runtime-versions:
       nodejs: 20
     commands:
-      # GitHub Status Reporting Functions
+      # Create shared functions file for GitHub status reporting
       - |
+        cat > /tmp/github_functions.sh << 'EOFFUNC'
         # Function to get GitHub repository info from CodeBuild environment
         get_github_info() {
           if [ -n "$CODEBUILD_SOURCE_VERSION" ]; then
@@ -74,8 +75,10 @@ phases:
           local log_stream="$CODEBUILD_BUILD_ID"
           echo "https://console.aws.amazon.com/cloudwatch/home?region=$region#logsV2:log-groups/log-group/\$252Faws\$252Fcodebuild\$252Fragtime-pipeline/log-events/$log_stream"
         }
+        EOFFUNC
         
-        # Initialize GitHub info
+        # Source functions and initialize
+        source /tmp/github_functions.sh
         get_github_info
         
         # Post initial status
@@ -94,12 +97,20 @@ phases:
       - echo "CDK Account $CDK_DEFAULT_ACCOUNT, Region $CDK_DEFAULT_REGION"
       
       # Report install phase success
-      - post_github_status "success" "ci/ragtime/install" "✅ Dependencies installed successfully" "$LOGS_URL"
+      - |
+        source /tmp/github_functions.sh
+        get_github_info
+        LOGS_URL=$(get_logs_url)
+        post_github_status "success" "ci/ragtime/install" "✅ Dependencies installed successfully" "$LOGS_URL"
       
   pre_build:
     commands:
       # Start pre-build phase reporting
-      - post_github_status "pending" "ci/ragtime/pre-build" "🔍 Running validations and tests..." "$LOGS_URL"
+      - |
+        source /tmp/github_functions.sh
+        get_github_info
+        LOGS_URL=$(get_logs_url)
+        post_github_status "pending" "ci/ragtime/pre-build" "🔍 Running validations and tests..." "$LOGS_URL"
       
       - echo "Running pre-build validations..."
       - echo "Build started on `date`"
@@ -128,8 +139,12 @@ phases:
         fi
       
       # Run linting if configured
-      - post_github_status "pending" "ci/ragtime/lint" "🔍 Running code quality checks..." "$LOGS_URL"
       - |
+        source /tmp/github_functions.sh
+        get_github_info
+        LOGS_URL=$(get_logs_url)
+        post_github_status "pending" "ci/ragtime/lint" "🔍 Running code quality checks..." "$LOGS_URL"
+        
         if [ -f "package.json" ] && npm run lint --silent 2>/dev/null; then
           echo "Running lint checks..."
           if npm run lint; then
