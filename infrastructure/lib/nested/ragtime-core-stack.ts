@@ -9,7 +9,6 @@ import { Construct } from 'constructs';
 export interface RagTimeCoreStackProps extends cdk.NestedStackProps {
   environment: string;
   vpc: ec2.Vpc;
-  encryptionKey: kms.Key;
 }
 
 export class RagTimeCoreStack extends cdk.NestedStack {
@@ -20,7 +19,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
   constructor(scope: Construct, id: string, props: RagTimeCoreStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc, encryptionKey } = props;
+    const { environment, vpc } = props;
 
     // OpenAI API Key Secret
     this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
@@ -31,7 +30,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         generateStringKey: 'api_key',
         excludeCharacters: '"@/\\\'',
       },
-      encryptionKey: encryptionKey,
+      // Use default AWS managed encryption to avoid cross-stack dependencies
     });
 
     // Security group for OpenSearch domain
@@ -93,10 +92,9 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       ],
       securityGroups: [openSearchSecurityGroup],
 
-      // Encryption configuration
+      // Encryption configuration (using default AWS managed keys)
       encryptionAtRest: {
         enabled: true,
-        kmsKey: encryptionKey,
       },
       nodeToNodeEncryption: true,
       enforceHttps: true,

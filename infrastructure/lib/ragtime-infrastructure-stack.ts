@@ -87,7 +87,6 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
     this.coreStack = new RagTimeCoreStack(this, 'CoreStack', {
       environment,
       vpc: this.vpc,
-      encryptionKey: toolkitStack.encryptionKey,
     });
 
     // Nested Stack: Compute (Lambda + API Gateway)
@@ -96,7 +95,6 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       vpc: this.vpc,
       documentsBucket: this.documentsBucket,
       documentsTable: this.documentsTable,
-      encryptionKey: toolkitStack.encryptionKey,
       openSearchDomain: this.coreStack.domain,
       openAISecret: this.coreStack.openAISecret,
     });

@@ -15,7 +15,6 @@ export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
   vpc: ec2.Vpc;
   documentsBucket: s3.Bucket;
   documentsTable: dynamodb.Table;
-  encryptionKey: kms.Key;
   openSearchDomain: opensearch.Domain;
   openAISecret: secretsmanager.Secret;
 }
@@ -27,7 +26,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc, documentsBucket, documentsTable, encryptionKey, openSearchDomain, openAISecret } = props;
+    const { environment, vpc, documentsBucket, documentsTable, openSearchDomain, openAISecret } = props;
 
     // Security Groups
     const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
