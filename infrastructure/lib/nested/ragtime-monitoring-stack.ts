@@ -66,65 +66,62 @@ export class RagTimeMonitoringStack extends cdk.NestedStack {
       schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
       test: synthetics.Test.custom({
         code: synthetics.Code.fromInline(`
-from aws_synthetics.selenium import synthetics_logger as logger
-from aws_synthetics.common import synthetics_configuration
-import time
 import json
-
-def main():
-    # Configure synthetics
-    synthetics_configuration.set_config({
-        "screenshot_on_step_start": False,
-        "screenshot_on_step_success": False,
-        "screenshot_on_step_failure": True
-    })
-    
-    health_url = "${apiGatewayUrl}health"
-    logger.info(f"Starting health check for: {health_url}")
-    
-    try:
-        # Import requests inside the function to ensure it's available
-        import requests
-        
-        start_time = time.time()
-        
-        # Make HTTP GET request
-        response = requests.get(health_url, timeout=30)
-        response_time = (time.time() - start_time) * 1000
-        
-        # Verify response status
-        if response.status_code != 200:
-            raise Exception(f"Health check failed with status: {response.status_code}")
-        
-        # Parse JSON response
-        try:
-            health_data = response.json()
-        except ValueError as e:
-            raise Exception(f"Health check response is not valid JSON: {str(e)}")
-        
-        # Validate required fields
-        if health_data.get('status') != 'healthy':
-            raise Exception(f"Health check status is not healthy: {health_data.get('status')}")
-        
-        if not health_data.get('timestamp'):
-            raise Exception('Health check response missing timestamp')
-        
-        if not health_data.get('services'):
-            raise Exception('Health check response missing services status')
-        
-        # Verify response time
-        if response_time > 5000:
-            raise Exception(f"Health check response time too slow: {response_time:.0f}ms")
-        
-        logger.info(f"Health check passed - Status: {health_data['status']}, Response time: {response_time:.0f}ms")
-        return {"statusCode": 200, "body": "Health check successful"}
-        
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        raise Exception(str(e))
+import urllib.request
+import urllib.error
+import time
 
 def handler(event, context):
-    return main()
+    health_url = "${apiGatewayUrl}health"
+    print(f"Starting health check for: {health_url}")
+    
+    try:
+        start_time = time.time()
+        
+        # Create request with timeout
+        request = urllib.request.Request(health_url)
+        request.add_header('User-Agent', 'AWS-Synthetics-Canary')
+        
+        # Make HTTP GET request
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response_time = (time.time() - start_time) * 1000
+            
+            # Check status code
+            if response.status != 200:
+                raise Exception(f"Health check failed with status: {response.status}")
+            
+            # Read response body
+            response_body = response.read().decode('utf-8')
+            
+            # Parse JSON response
+            try:
+                health_data = json.loads(response_body)
+            except json.JSONDecodeError as e:
+                raise Exception(f"Health check response is not valid JSON: {str(e)}")
+            
+            # Validate required fields
+            if health_data.get('status') != 'healthy':
+                raise Exception(f"Health check status is not healthy: {health_data.get('status')}")
+            
+            if not health_data.get('timestamp'):
+                raise Exception('Health check response missing timestamp')
+            
+            if not health_data.get('services'):
+                raise Exception('Health check response missing services status')
+            
+            # Verify response time
+            if response_time > 5000:
+                raise Exception(f"Health check response time too slow: {response_time:.0f}ms")
+            
+            print(f"Health check passed - Status: {health_data['status']}, Response time: {response_time:.0f}ms")
+            return {"statusCode": 200, "body": "Health check successful"}
+            
+    except urllib.error.URLError as e:
+        print(f"URL Error: {str(e)}")
+        raise Exception(f"Health check failed: {str(e)}")
+    except Exception as e:
+        print(f"Health check failed: {str(e)}")
+        raise Exception(str(e))
         `),
         handler: 'index.handler',
       }),
@@ -145,103 +142,89 @@ def handler(event, context):
       schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
       test: synthetics.Test.custom({
         code: synthetics.Code.fromInline(`
-from aws_synthetics.selenium import synthetics_logger as logger
-from aws_synthetics.common import synthetics_configuration
 import json
-
-def main():
-    # Configure synthetics
-    synthetics_configuration.set_config({
-        "screenshot_on_step_start": False,
-        "screenshot_on_step_success": False,
-        "screenshot_on_step_failure": True
-    })
-    
-    health_url = "${apiGatewayUrl}health"
-    logger.info(f"Starting CORS test for: {health_url}")
-    
-    try:
-        # Import requests inside the function
-        import requests
-        
-        # Test 1: Preflight OPTIONS request
-        logger.info("Testing CORS preflight request...")
-        
-        preflight_headers = {
-            'Origin': 'https://example.com',
-            'Access-Control-Request-Method': 'GET',
-            'Access-Control-Request-Headers': 'Content-Type'
-        }
-        
-        preflight_response = requests.options(health_url, headers=preflight_headers, timeout=30)
-        
-        if preflight_response.status_code != 200:
-            raise Exception(f"CORS preflight failed with status: {preflight_response.status_code}")
-        
-        # Check required CORS headers in preflight response
-        required_cors_headers = [
-            'access-control-allow-origin',
-            'access-control-allow-methods',
-            'access-control-allow-headers'
-        ]
-        
-        response_headers = {k.lower(): v for k, v in preflight_response.headers.items()}
-        
-        for header in required_cors_headers:
-            if header not in response_headers:
-                raise Exception(f"Missing CORS header in preflight response: {header}")
-        
-        logger.info("CORS preflight test passed")
-        
-        # Test 2: Actual CORS request
-        logger.info("Testing actual CORS request...")
-        
-        cors_headers = {
-            'Origin': 'https://example.com',
-            'Content-Type': 'application/json'
-        }
-        
-        cors_response = requests.get(health_url, headers=cors_headers, timeout=30)
-        
-        if cors_response.status_code != 200:
-            raise Exception(f"CORS request failed with status: {cors_response.status_code}")
-        
-        # Verify CORS headers in actual response
-        response_headers = {k.lower(): v for k, v in cors_response.headers.items()}
-        
-        if 'access-control-allow-origin' not in response_headers:
-            raise Exception('Response missing Access-Control-Allow-Origin header')
-        
-        # Verify response body
-        try:
-            response_data = cors_response.json()
-        except ValueError as e:
-            raise Exception(f"CORS response body is not valid JSON: {str(e)}")
-        
-        if response_data.get('status') != 'healthy':
-            raise Exception(f"CORS request returned unhealthy status: {response_data.get('status')}")
-        
-        logger.info("CORS functionality test passed")
-        
-        # Test 3: Verify allowed methods
-        logger.info("Testing CORS allowed methods...")
-        
-        allowed_methods = response_headers.get('access-control-allow-methods', '')
-        expected_methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
-        
-        for method in expected_methods:
-            if method not in allowed_methods.upper():
-                logger.warning(f"Method {method} not found in allowed methods: {allowed_methods}")
-        
-        logger.info("All CORS tests completed successfully")
-        return {"statusCode": 200, "body": "CORS tests successful"}
-        
-    except Exception as e:
-        logger.error(f"CORS test failed: {str(e)}")
-        raise Exception(str(e))
+import urllib.request
+import urllib.error
 
 def handler(event, context):
-    return main()
+    health_url = "${apiGatewayUrl}health"
+    print(f"Starting CORS test for: {health_url}")
+    
+    try:
+        # Test 1: Preflight OPTIONS request
+        print("Testing CORS preflight request...")
+        
+        preflight_request = urllib.request.Request(health_url, method='OPTIONS')
+        preflight_request.add_header('Origin', 'https://example.com')
+        preflight_request.add_header('Access-Control-Request-Method', 'GET')
+        preflight_request.add_header('Access-Control-Request-Headers', 'Content-Type')
+        preflight_request.add_header('User-Agent', 'AWS-Synthetics-Canary')
+        
+        with urllib.request.urlopen(preflight_request, timeout=30) as response:
+            if response.status != 200:
+                raise Exception(f"CORS preflight failed with status: {response.status}")
+            
+            # Check required CORS headers
+            response_headers = {k.lower(): v for k, v in response.headers.items()}
+            required_cors_headers = [
+                'access-control-allow-origin',
+                'access-control-allow-methods',
+                'access-control-allow-headers'
+            ]
+            
+            for header in required_cors_headers:
+                if header not in response_headers:
+                    raise Exception(f"Missing CORS header in preflight response: {header}")
+            
+            print("CORS preflight test passed")
+        
+        # Test 2: Actual CORS request
+        print("Testing actual CORS request...")
+        
+        cors_request = urllib.request.Request(health_url)
+        cors_request.add_header('Origin', 'https://example.com')
+        cors_request.add_header('Content-Type', 'application/json')
+        cors_request.add_header('User-Agent', 'AWS-Synthetics-Canary')
+        
+        with urllib.request.urlopen(cors_request, timeout=30) as response:
+            if response.status != 200:
+                raise Exception(f"CORS request failed with status: {response.status}")
+            
+            # Check CORS headers in actual response
+            response_headers = {k.lower(): v for k, v in response.headers.items()}
+            
+            if 'access-control-allow-origin' not in response_headers:
+                raise Exception('Response missing Access-Control-Allow-Origin header')
+            
+            # Verify response body
+            response_body = response.read().decode('utf-8')
+            try:
+                response_data = json.loads(response_body)
+            except json.JSONDecodeError as e:
+                raise Exception(f"CORS response body is not valid JSON: {str(e)}")
+            
+            if response_data.get('status') != 'healthy':
+                raise Exception(f"CORS request returned unhealthy status: {response_data.get('status')}")
+            
+            print("CORS functionality test passed")
+            
+            # Test 3: Verify allowed methods
+            allowed_methods = response_headers.get('access-control-allow-methods', '')
+            expected_methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+            
+            for method in expected_methods:
+                if method not in allowed_methods.upper():
+                    print(f"Warning: Method {method} not found in allowed methods: {allowed_methods}")
+            
+            print("All CORS tests completed successfully")
+            return {"statusCode": 200, "body": "CORS tests successful"}
+            
+    except urllib.error.URLError as e:
+        print(f"URL Error: {str(e)}")
+        raise Exception(f"CORS test failed: {str(e)}")
+    except Exception as e:
+        print(f"CORS test failed: {str(e)}")
+        raise Exception(str(e))
         `),
         handler: 'index.handler',
       }),
