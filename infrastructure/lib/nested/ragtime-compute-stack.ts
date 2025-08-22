@@ -151,17 +151,15 @@ export class RagTimeComputeStack extends cdk.NestedStack {
       ],
     });
 
-    // Outputs
+    // Outputs (no exports to avoid conflicts with main stack)
     new cdk.CfnOutput(this, 'ApiGatewayUrl', {
       value: this.api.url,
       description: 'URL of the API Gateway',
-      exportName: `RagTimeApiUrl-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'HealthCheckEndpoint', {
       value: `${this.api.url}health`,
       description: 'Health check endpoint URL',
-      exportName: `RagTimeHealthCheckUrl-${environment}`,
     });
   }
 }

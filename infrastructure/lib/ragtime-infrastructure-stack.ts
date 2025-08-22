@@ -156,5 +156,17 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       description: 'Name of the documents table',
       exportName: `RagTimeDocumentsTable-${environment}`,
     });
+
+    new cdk.CfnOutput(this, 'ApiGatewayUrl', {
+      value: this.computeStack.api.url,
+      description: 'URL of the API Gateway',
+      exportName: `RagTimeApiUrl-${environment}`,
+    });
+
+    new cdk.CfnOutput(this, 'HealthCheckEndpoint', {
+      value: `${this.computeStack.api.url}health`,
+      description: 'Health check endpoint URL',
+      exportName: `RagTimeHealthCheckUrl-${environment}`,
+    });
   }
 }
