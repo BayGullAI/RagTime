@@ -47,11 +47,24 @@ phases:
           local description="$3"
           local target_url="$4"
           
+          echo "DEBUG: Attempting to post GitHub status: $context - $state - $description"
+          
           # Get GitHub token from SSM if available
+          echo "DEBUG: Retrieving GitHub token from SSM..."
           GITHUB_TOKEN=$(aws ssm get-parameter --name "/ragtime/github-token" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "")
+          
+          echo "DEBUG: GitHub token retrieved: $([ -n "$GITHUB_TOKEN" ] && echo "YES" || echo "NO")"
+          echo "DEBUG: GitHub SHA: $GITHUB_SHA"
+          echo "DEBUG: GitHub REPO: $GITHUB_REPO"
           
           if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_SHA" ] && [ -n "$GITHUB_REPO" ]; then
             echo "Posting GitHub status: $context - $state - $description"
+            
+            # Check if curl is available
+            if ! command -v curl >/dev/null 2>&1; then
+              echo "ERROR: curl command not found"
+              return 1
+            fi
             
             curl -X POST \
               -H "Authorization: token $GITHUB_TOKEN" \
@@ -62,9 +75,9 @@ phases:
                 \"context\": \"$context\",
                 \"description\": \"$description\",
                 \"target_url\": \"$target_url\"
-              }" || echo "Failed to post GitHub status"
+              }" && echo "✅ GitHub status posted successfully" || echo "❌ Failed to post GitHub status"
           else
-            echo "GitHub status posting not available (missing token, SHA, or repo info)"
+            echo "GitHub status posting not available - Token: $([ -n "$GITHUB_TOKEN" ] && echo "✓" || echo "✗") SHA: $([ -n "$GITHUB_SHA" ] && echo "✓" || echo "✗") Repo: $([ -n "$GITHUB_REPO" ] && echo "✓" || echo "✗")"
           fi
         }
         
@@ -83,11 +96,14 @@ phases:
         
         # Post initial status
         LOGS_URL=$(get_logs_url)
-        post_github_status "pending" "ci/ragtime/install" "Installing dependencies and tools..." "$LOGS_URL"
+        post_github_status "pending" "ci/ragtime/install" "Installing dependencies and tools..." "$LOGS_URL" || true
       
       - echo "Installing dependencies..."
       - echo "Installing CDK globally..."
       - npm install -g aws-cdk@latest
+      
+      # Ensure curl is available for GitHub API calls
+      - which curl || (echo "Installing curl..." && apt-get update && apt-get install -y curl)
       - echo "Node.js version:" && node --version
       - echo "NPM version:" && npm --version
       - echo "CDK version:" && cdk --version
@@ -101,7 +117,7 @@ phases:
         source /tmp/github_functions.sh
         get_github_info
         LOGS_URL=$(get_logs_url)
-        post_github_status "success" "ci/ragtime/install" "✅ Dependencies installed successfully" "$LOGS_URL"
+        post_github_status "success" "ci/ragtime/install" "✅ Dependencies installed successfully" "$LOGS_URL" || true
       
   pre_build:
     commands:
