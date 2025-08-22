@@ -45,10 +45,9 @@ export class RagTimeComputeStack extends cdk.NestedStack {
       'Allow HTTPS traffic'
     );
 
-    // Lambda execution role
+    // Lambda execution role (let CDK auto-generate name to avoid conflicts)
     const lambdaExecutionRole = new iam.Role(this, 'LambdaExecutionRole', {
-      roleName: `RagTimeLambdaExecutionRole-${environment}`,
-      description: `Lambda execution role for RagTime ${environment} environment`,
+      description: `Lambda execution role for RagTime ${environment} environment (ComputeStack)`,
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
@@ -60,9 +59,8 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     documentsTable.grantReadWriteData(lambdaExecutionRole);
     encryptionKey.grantEncryptDecrypt(lambdaExecutionRole);
 
-    // Health Check Lambda Function
+    // Health Check Lambda Function (let CDK auto-generate name to avoid conflicts)
     this.healthCheckLambda = new lambda.Function(this, 'HealthCheckFunction', {
-      functionName: `ragtime-health-check-${environment}`,
       description: 'Health check endpoint for RagTime service',
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'index.handler',
@@ -108,9 +106,8 @@ export class RagTimeComputeStack extends cdk.NestedStack {
       },
     });
 
-    // API Gateway REST API
+    // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
-      restApiName: `ragtime-api-${environment}`,
       description: `RagTime REST API for ${environment} environment`,
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
