@@ -169,7 +169,7 @@ exports.handler = async () => {
         `),
         handler: 'index.handler',
       }),
-      runtime: synthetics.Runtime.SYNTHETICS_NODEJS_PUPPETEER_5_1,
+      runtime: new synthetics.Runtime('syn-nodejs-puppeteer-10.0', synthetics.RuntimeFamily.NODEJS),
       environmentVariables: {
         API_URL: apiGatewayUrl,
       },
@@ -349,7 +349,7 @@ exports.handler = async () => {
         `),
         handler: 'index.handler',
       }),
-      runtime: synthetics.Runtime.SYNTHETICS_NODEJS_PUPPETEER_5_1,
+      runtime: new synthetics.Runtime('syn-nodejs-puppeteer-10.0', synthetics.RuntimeFamily.NODEJS),
       environmentVariables: {
         API_URL: apiGatewayUrl,
       },
