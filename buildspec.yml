@@ -3,12 +3,85 @@ version: 0.2
 # RagTime CodeBuild Pipeline
 # Builds, tests, and deploys the RagTime CDK infrastructure stack
 # Foundation CI/CD pipeline for Milestone 1
+# Enhanced with detailed GitHub status reporting
+
+env:
+  variables:
+    NODE_ENV: production
+    AWS_DEFAULT_REGION: us-east-1
+  exported-variables:
+    - AWS_REGION
+    - AWS_DEFAULT_REGION
+    - AWS_ACCOUNT_ID
+    - CODEBUILD_BUILD_ID
 
 phases:
   install:
     runtime-versions:
       nodejs: 20
     commands:
+      # GitHub Status Reporting Functions
+      - |
+        # Function to get GitHub repository info from CodeBuild environment
+        get_github_info() {
+          if [ -n "$CODEBUILD_SOURCE_VERSION" ]; then
+            export GITHUB_SHA="$CODEBUILD_SOURCE_VERSION"
+          fi
+          
+          # Extract owner and repo from source location
+          if [ -n "$CODEBUILD_SOURCE_REPO_URL" ]; then
+            export GITHUB_REPO=$(echo "$CODEBUILD_SOURCE_REPO_URL" | sed 's/.*github\.com[/:]\([^/]*\/[^/]*\)\.git.*/\1/')
+          else
+            export GITHUB_REPO="BayGullAI/RagTime"
+          fi
+          
+          echo "GitHub Repository: $GITHUB_REPO"
+          echo "GitHub SHA: $GITHUB_SHA"
+        }
+        
+        # Function to post GitHub status
+        post_github_status() {
+          local state="$1"
+          local context="$2"
+          local description="$3"
+          local target_url="$4"
+          
+          # Get GitHub token from SSM if available
+          GITHUB_TOKEN=$(aws ssm get-parameter --name "/ragtime/github-token" --with-decryption --query "Parameter.Value" --output text 2>/dev/null || echo "")
+          
+          if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_SHA" ] && [ -n "$GITHUB_REPO" ]; then
+            echo "Posting GitHub status: $context - $state - $description"
+            
+            curl -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$GITHUB_REPO/statuses/$GITHUB_SHA" \
+              -d "{
+                \"state\": \"$state\",
+                \"context\": \"$context\",
+                \"description\": \"$description\",
+                \"target_url\": \"$target_url\"
+              }" || echo "Failed to post GitHub status"
+          else
+            echo "GitHub status posting not available (missing token, SHA, or repo info)"
+          fi
+        }
+        
+        # Function to get CloudWatch logs URL
+        get_logs_url() {
+          local region="$AWS_DEFAULT_REGION"
+          local log_group="/aws/codebuild/ragtime-pipeline"
+          local log_stream="$CODEBUILD_BUILD_ID"
+          echo "https://console.aws.amazon.com/cloudwatch/home?region=$region#logsV2:log-groups/log-group/\$252Faws\$252Fcodebuild\$252Fragtime-pipeline/log-events/$log_stream"
+        }
+        
+        # Initialize GitHub info
+        get_github_info
+        
+        # Post initial status
+        LOGS_URL=$(get_logs_url)
+        post_github_status "pending" "ci/ragtime/install" "Installing dependencies and tools..." "$LOGS_URL"
+      
       - echo "Installing dependencies..."
       - echo "Installing CDK globally..."
       - npm install -g aws-cdk@latest
@@ -20,8 +93,14 @@ phases:
       - export CDK_DEFAULT_REGION=$AWS_REGION
       - echo "CDK Account $CDK_DEFAULT_ACCOUNT, Region $CDK_DEFAULT_REGION"
       
+      # Report install phase success
+      - post_github_status "success" "ci/ragtime/install" "✅ Dependencies installed successfully" "$LOGS_URL"
+      
   pre_build:
     commands:
+      # Start pre-build phase reporting
+      - post_github_status "pending" "ci/ragtime/pre-build" "🔍 Running validations and tests..." "$LOGS_URL"
+      
       - echo "Running pre-build validations..."
       - echo "Build started on `date`"
       - echo "Current directory:" && pwd
@@ -49,36 +128,70 @@ phases:
         fi
       
       # Run linting if configured
+      - post_github_status "pending" "ci/ragtime/lint" "🔍 Running code quality checks..." "$LOGS_URL"
       - |
         if [ -f "package.json" ] && npm run lint --silent 2>/dev/null; then
           echo "Running lint checks..."
-          npm run lint
+          if npm run lint; then
+            post_github_status "success" "ci/ragtime/lint" "✅ Code quality checks passed" "$LOGS_URL"
+          else
+            post_github_status "failure" "ci/ragtime/lint" "❌ Code quality checks failed" "$LOGS_URL"
+            exit 1
+          fi
         else
           echo "No linting configured yet - will be added in future issues"
+          post_github_status "success" "ci/ragtime/lint" "⚠️ Linting not configured (skipped)" "$LOGS_URL"
         fi
       
       # Run tests if configured
+      - post_github_status "pending" "ci/ragtime/test" "🧪 Running test suite..." "$LOGS_URL"
       - |
         if [ -f "package.json" ] && npm run test --silent 2>/dev/null; then
           echo "Running test suite..."
-          npm run test
+          if npm run test; then
+            post_github_status "success" "ci/ragtime/test" "✅ All tests passed" "$LOGS_URL"
+          else
+            post_github_status "failure" "ci/ragtime/test" "❌ Tests failed" "$LOGS_URL"
+            exit 1
+          fi
         else
           echo "No tests configured yet - will be added in future issues"
+          post_github_status "success" "ci/ragtime/test" "⚠️ Tests not configured (skipped)" "$LOGS_URL"
         fi
       
       # Validate CDK app if it exists
+      - post_github_status "pending" "ci/ragtime/cdk-synth" "🏗️ Validating CDK application..." "$LOGS_URL"
       - |
         if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
           echo "Validating CDK application..."
           echo "Building TypeScript first..."
-          npm run build
-          cdk synth --quiet
+          if npm run build; then
+            echo "✅ TypeScript compilation successful"
+          else
+            post_github_status "failure" "ci/ragtime/cdk-synth" "❌ TypeScript compilation failed" "$LOGS_URL"
+            exit 1
+          fi
+          
+          if cdk synth --quiet; then
+            echo "✅ CDK synthesis successful"
+            post_github_status "success" "ci/ragtime/cdk-synth" "✅ CDK validation passed" "$LOGS_URL"
+          else
+            post_github_status "failure" "ci/ragtime/cdk-synth" "❌ CDK synthesis failed" "$LOGS_URL"
+            exit 1
+          fi
         else
           echo "No CDK app found yet - this will be created in future issues"
+          post_github_status "success" "ci/ragtime/cdk-synth" "⚠️ CDK validation skipped (no app found)" "$LOGS_URL"
         fi
+      
+      # Report pre-build phase success
+      - post_github_status "success" "ci/ragtime/pre-build" "✅ Pre-build validations completed" "$LOGS_URL"
       
   build:
     commands:
+      # Start build phase reporting
+      - post_github_status "pending" "ci/ragtime/build" "🔨 Building application..." "$LOGS_URL"
+      
       - echo "Build phase - building CDK application..."
       - echo "CodeBuild pipeline infrastructure validated on `date`"
       
@@ -86,18 +199,37 @@ phases:
       - |
         if [ -f "package.json" ]; then
           echo "Building all components..."
-          npm run build || echo "No build script configured yet"
+          if npm run build; then
+            echo "✅ Build successful"
+            post_github_status "success" "ci/ragtime/build" "✅ Application built successfully" "$LOGS_URL"
+          else
+            echo "❌ Build failed"
+            post_github_status "failure" "ci/ragtime/build" "❌ Build failed" "$LOGS_URL"
+            exit 1
+          fi
+        else
+          echo "No build script configured yet"
+          post_github_status "success" "ci/ragtime/build" "⚠️ Build skipped (no script configured)" "$LOGS_URL"
         fi
       
       # Compile TypeScript for CDK app
       - |
         if [ -f "tsconfig.json" ] || [ -f "infrastructure/tsconfig.json" ]; then
           echo "Compiling TypeScript..."
-          npx tsc || echo "TypeScript compilation will be configured in future issues"
+          if npx tsc; then
+            echo "✅ TypeScript compilation successful"
+          else
+            echo "❌ TypeScript compilation failed"
+            post_github_status "failure" "ci/ragtime/build" "❌ TypeScript compilation failed" "$LOGS_URL"
+            exit 1
+          fi
         fi
 
   post_build:
     commands:
+      # Start deployment phase reporting
+      - post_github_status "pending" "ci/ragtime/deploy" "🚀 Deploying infrastructure..." "$LOGS_URL"
+      
       - echo "Post-build deployment phase started..."
       - echo "Deployment started on `date`"
       
@@ -117,12 +249,22 @@ phases:
       
       # Bootstrap CDK with explicit account and region
       - echo "Bootstrapping CDK if needed..."
-      - cdk bootstrap aws://$CDK_DEFAULT_ACCOUNT/$AWS_DEFAULT_REGION --require-approval never
+      - post_github_status "pending" "ci/ragtime/bootstrap" "🔧 Bootstrapping CDK environment..." "$LOGS_URL"
+      - |
+        if cdk bootstrap aws://$CDK_DEFAULT_ACCOUNT/$AWS_DEFAULT_REGION --require-approval never; then
+          echo "✅ CDK bootstrap successful"
+          post_github_status "success" "ci/ragtime/bootstrap" "✅ CDK environment ready" "$LOGS_URL"
+        else
+          echo "❌ CDK bootstrap failed"
+          post_github_status "failure" "ci/ragtime/bootstrap" "❌ CDK bootstrap failed" "$LOGS_URL"
+          exit 1
+        fi
       
       # Deploy CDK stack if app exists
       - |
         if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
           echo "Deploying RagTime CDK stack..."
+          post_github_status "pending" "ci/ragtime/infrastructure" "🏗️ Deploying infrastructure stack..." "$LOGS_URL"
           
           # Check and handle stack state before deployment
           STACK_NAME="RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT"
@@ -132,6 +274,7 @@ phases:
           
           if [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
             echo "Stack is in rollback state, deleting and recreating..."
+            post_github_status "pending" "ci/ragtime/infrastructure" "🔄 Cleaning up failed stack..." "$LOGS_URL"
             aws cloudformation delete-stack --stack-name $STACK_NAME
             echo "Waiting for stack deletion to complete..."
             aws cloudformation wait stack-delete-complete --stack-name $STACK_NAME
@@ -142,17 +285,35 @@ phases:
           fi
           
           # Deploy the CDK stack
-          cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose
-          
-          # Verify deployment
-          echo "Verifying deployment..."
-          aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text
+          echo "Starting CDK deployment..."
+          if cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose; then
+            echo "✅ Infrastructure deployment successful"
+            
+            # Get stack status and resources
+            FINAL_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text)
+            echo "Final stack status: $FINAL_STATUS"
+            
+            # Get CloudFormation console URL
+            CF_URL="https://console.aws.amazon.com/cloudformation/home?region=$AWS_DEFAULT_REGION#/stacks/stackinfo?stackId=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackId' --output text | sed 's/.*\///')"
+            
+            if [[ "$FINAL_STATUS" == "CREATE_COMPLETE" ]] || [[ "$FINAL_STATUS" == "UPDATE_COMPLETE" ]]; then
+              post_github_status "success" "ci/ragtime/infrastructure" "✅ Infrastructure deployed: $FINAL_STATUS" "$CF_URL"
+            else
+              post_github_status "failure" "ci/ragtime/infrastructure" "❌ Infrastructure deployment failed: $FINAL_STATUS" "$CF_URL"
+              exit 1
+            fi
+          else
+            echo "❌ Infrastructure deployment failed"
+            post_github_status "failure" "ci/ragtime/infrastructure" "❌ CDK deployment failed" "$LOGS_URL"
+            exit 1
+          fi
           
         else
           echo "No CDK app found - deployment will be enabled when CDK app is added in issue #2"
+          post_github_status "success" "ci/ragtime/infrastructure" "⚠️ Infrastructure deployment skipped (no CDK app)" "$LOGS_URL"
         fi
       
-      # Output deployment information
+      # Output deployment information and final status
       - echo "=== DEPLOYMENT SUMMARY ==="
       - echo "Environment Infrastructure Foundation"
       - echo "Region $AWS_DEFAULT_REGION"
@@ -160,9 +321,70 @@ phases:
       - |
         if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
           STACK_NAME="RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT"
-          echo "Stack Status: $(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NO_STACK_YET')"
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NO_STACK_YET')
+          echo "Stack Status: $STACK_STATUS"
+          
+          # List deployed resources
+          if [[ "$STACK_STATUS" == "CREATE_COMPLETE" ]] || [[ "$STACK_STATUS" == "UPDATE_COMPLETE" ]]; then
+            echo "=== DEPLOYED RESOURCES ==="
+            aws cloudformation describe-stack-resources --stack-name $STACK_NAME --query 'StackResources[?ResourceStatus==`CREATE_COMPLETE` || ResourceStatus==`UPDATE_COMPLETE`].[ResourceType,LogicalResourceId,ResourceStatus]' --output table || echo "Could not retrieve resource list"
+          fi
         fi
       - echo "CodeBuild pipeline deployed successfully on $(date)"
+      
+      # Post final success status
+      - post_github_status "success" "ci/ragtime/deploy" "✅ Deployment completed successfully" "$LOGS_URL"
+      - |
+        # Create summary comment if this is a PR
+        if [ -n "$GITHUB_TOKEN" ] && [ -n "$CODEBUILD_SOURCE_VERSION" ] && [[ "$CODEBUILD_WEBHOOK_EVENT" == "PULL_REQUEST"* ]]; then
+          echo "Creating deployment summary comment..."
+          
+          # Get PR number from webhook payload
+          PR_NUMBER=$(echo "$CODEBUILD_WEBHOOK_PULL_REQUEST_NUMBER" || echo "")
+          
+          if [ -n "$PR_NUMBER" ]; then
+            SUMMARY="## 🚀 Deployment Summary
+            
+**Build ID:** \`$CODEBUILD_BUILD_ID\`
+**Environment:** \`$DEPLOYMENT_ENVIRONMENT\`
+**Region:** \`$AWS_DEFAULT_REGION\`
+**Duration:** Build completed at \`$(date)\`
+
+### ✅ Deployment Status
+- **Install Phase:** ✅ Dependencies installed
+- **Pre-build Phase:** ✅ Validations passed (lint, test, CDK synth)
+- **Build Phase:** ✅ Application built successfully
+- **Deploy Phase:** ✅ Infrastructure deployed
+
+### 📊 Infrastructure Status
+$(if [ -f "cdk.json" ]; then
+  STACK_NAME="RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT"
+  STACK_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NO_STACK')
+  echo "- **Stack:** \`$STACK_NAME\` - \`$STACK_STATUS\`"
+  
+  if [[ "$STACK_STATUS" == "CREATE_COMPLETE" ]] || [[ "$STACK_STATUS" == "UPDATE_COMPLETE" ]]; then
+    echo "- **Resources:** Deployed successfully"
+    echo "- **Console:** [View Stack](https://console.aws.amazon.com/cloudformation/home?region=$AWS_DEFAULT_REGION#/stacks)"
+  fi
+else
+  echo "- **Stack:** CDK app not found (skipped)"
+fi)
+
+### 🔗 Links
+- [CloudWatch Logs]($LOGS_URL)
+- [CodeBuild Console](https://console.aws.amazon.com/codesuite/codebuild/projects/ragtime-pipeline)
+- [CloudFormation Console](https://console.aws.amazon.com/cloudformation/home?region=$AWS_DEFAULT_REGION)
+
+---
+*🤖 Generated by RagTime CI/CD Pipeline*"
+            
+            curl -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$GITHUB_REPO/issues/$PR_NUMBER/comments" \
+              -d "{\"body\": $(echo "$SUMMARY" | jq -R -s .)}" || echo "Failed to post summary comment"
+          fi
+        fi
 
 artifacts:
   files:
@@ -178,16 +400,6 @@ cache:
     - node_modules/**/*
     - ~/.npm/**/*
     - ~/.cache/pip/**/*
-
-env:
-  variables:
-    NODE_ENV: production
-    AWS_DEFAULT_REGION: us-east-1
-  exported-variables:
-    - AWS_REGION
-    - AWS_DEFAULT_REGION
-    - AWS_ACCOUNT_ID
-    - CODEBUILD_BUILD_ID
 
 reports:
   test_reports:
