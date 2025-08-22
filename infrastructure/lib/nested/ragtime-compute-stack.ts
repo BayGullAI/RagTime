@@ -61,8 +61,10 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     // Grant Lambda access to resources
     documentsBucket.grantReadWrite(lambdaExecutionRole);
     documentsTable.grantReadWriteData(lambdaExecutionRole);
-    encryptionKey.grantEncryptDecrypt(lambdaExecutionRole);
     openAISecret.grantRead(lambdaExecutionRole);
+    
+    // Note: KMS permissions for encryption key are granted automatically through
+    // the bucket and secret grants above, avoiding circular dependency
 
     // Grant Lambda access to OpenSearch domain
     lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
