@@ -89,17 +89,17 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         domainName: `ragtime-vector-search-${environment}`,
         version: opensearch.EngineVersion.OPENSEARCH_2_7,
         
-        // Using smaller instance types for better availability
+        // Using standard instance types for better availability
         capacity: {
           dataNodes: 1, // Single node for dev to reduce resource constraints
-          dataNodeInstanceType: 't3.small.search', // Smaller, more available instance type
+          dataNodeInstanceType: 'm6g.large.search', // Standard instance type with better availability
           masterNodes: 0, // No dedicated masters to reduce resource usage
         },
 
-        // Reduced storage configuration
+        // Standard storage configuration  
         ebs: {
           volumeSize: 20, // Smaller volume size
-          volumeType: ec2.EbsDeviceVolumeType.GP2, // Standard GP2 instead of GP3
+          volumeType: ec2.EbsDeviceVolumeType.GP3, // GP3 for better performance and availability
         },
 
         // VPC configuration for security
