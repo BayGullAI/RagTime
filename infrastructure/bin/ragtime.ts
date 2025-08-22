@@ -33,10 +33,10 @@ const pipelineStack = new RagTimePipelineStack(app, 'RagTimePipeline', {
   githubToken,
 });
 
-// Stack 3: Core Infrastructure
+// Stack 3: Core Infrastructure with nested stacks
 const infrastructureStack = new RagTimeInfrastructureStack(app, `RagTimeInfrastructure-${environment}`, {
   env,
-  description: `RagTime Core Infrastructure - VPC, networking, and foundational services for ${environment} environment`,
+  description: `RagTime Core Infrastructure - VPC, compute, and monitoring for ${environment} environment`,
   environment,
   toolkitStack,
 });

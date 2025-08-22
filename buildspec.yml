@@ -141,15 +141,86 @@ phases:
             sleep 60
           fi
           
-          # Deploy the CDK stack
+          # Deploy the CDK stack (includes all nested stacks automatically)
+          # Note: Nested stacks are deployed automatically with the parent stack
+          # Alternative: Use 'cdk deploy --all' to deploy all top-level stacks
           cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose
-          
-          # Verify deployment
-          echo "Verifying deployment..."
-          aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text
           
         else
           echo "No CDK app found - deployment will be enabled when CDK app is added in issue #2"
+        fi
+        
+        # Always verify final stack status regardless of whether CDK skipped deployment
+        echo "=== FINAL STACK STATUS VALIDATION ==="
+        if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
+          STACK_NAME="RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT"
+          echo "Checking final status of stack: $STACK_NAME"
+          
+          FINAL_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          echo "Final stack status: $FINAL_STATUS"
+          
+          case "$FINAL_STATUS" in
+            "CREATE_COMPLETE"|"UPDATE_COMPLETE")
+              echo "✅ Stack is in successful state: $FINAL_STATUS"
+              ;;
+            "ROLLBACK_COMPLETE"|"UPDATE_ROLLBACK_COMPLETE"|"CREATE_FAILED"|"UPDATE_FAILED"|"DELETE_FAILED")
+              echo "❌ Stack is in failed state: $FINAL_STATUS"
+              echo "Build failing due to CloudFormation stack failure"
+              exit 1
+              ;;
+            *"ROLLBACK"*|*"FAILED"*)
+              echo "❌ Stack is in failed state: $FINAL_STATUS"
+              echo "Build failing due to CloudFormation stack failure"
+              exit 1
+              ;;
+            "DOES_NOT_EXIST")
+              echo "⚠️  Stack does not exist: $STACK_NAME"
+              echo "Build failing because stack was not created"
+              exit 1
+              ;;
+            *)
+              echo "⚠️  Stack is in unexpected state: $FINAL_STATUS"
+              echo "Build failing due to unexpected stack status"
+              exit 1
+              ;;
+          esac
+          
+          # Verify nested stacks are also successful (only if main stack is OK)
+          if [ "$FINAL_STATUS" = "CREATE_COMPLETE" ] || [ "$FINAL_STATUS" = "UPDATE_COMPLETE" ]; then
+            echo "Checking nested stacks status..."
+            NESTED_STACKS=$(aws cloudformation describe-stack-resources --stack-name $STACK_NAME --query 'StackResources[?ResourceType==`AWS::CloudFormation::Stack`].PhysicalResourceId' --output text)
+            
+            if [ -n "$NESTED_STACKS" ] && [ "$NESTED_STACKS" != "None" ]; then
+              for NESTED_STACK in $NESTED_STACKS; do
+                if [ "$NESTED_STACK" != "None" ] && [ -n "$NESTED_STACK" ]; then
+                  NESTED_STATUS=$(aws cloudformation describe-stacks --stack-name $NESTED_STACK --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "UNKNOWN")
+                  echo "Nested stack $NESTED_STACK status: $NESTED_STATUS"
+                  
+                  case "$NESTED_STATUS" in
+                    "CREATE_COMPLETE"|"UPDATE_COMPLETE")
+                      echo "✅ Nested stack successful: $NESTED_STACK"
+                      ;;
+                    "ROLLBACK_COMPLETE"|"UPDATE_ROLLBACK_COMPLETE"|"CREATE_FAILED"|"UPDATE_FAILED"|"DELETE_FAILED"|*"ROLLBACK"*|*"FAILED"*)
+                      echo "❌ Nested stack failed: $NESTED_STACK ($NESTED_STATUS)"
+                      echo "Build failing due to nested stack deployment failure"
+                      exit 1
+                      ;;
+                    *)
+                      echo "⚠️  Unknown nested stack status: $NESTED_STACK ($NESTED_STATUS)"
+                      echo "Build failing due to unexpected nested stack status"
+                      exit 1
+                      ;;
+                  esac
+                fi
+              done
+            else
+              echo "No nested stacks found or nested stacks list is empty"
+            fi
+          else
+            echo "Skipping nested stack validation due to main stack failure"
+          fi
+        else
+          echo "No CDK app found - skipping stack validation"
         fi
       
       # Output deployment information
