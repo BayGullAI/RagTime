@@ -132,10 +132,5 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       description: 'Health check endpoint URL',
     });
 
-    new cdk.CfnOutput(this, 'OpenSearchEndpoint', {
-      value: this.openSearchStack.domainEndpoint,
-      description: 'OpenSearch domain endpoint URL',
-      exportName: `RagTimeOpenSearchEndpoint-${environment}`,
-    });
   }
 }
