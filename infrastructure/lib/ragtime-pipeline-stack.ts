@@ -91,6 +91,19 @@ export class RagTimePipelineStack extends cdk.Stack {
       ],
     }));
 
+    // SSM Parameter Store permissions for GitHub token
+    this.codeBuildRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'SSMParameterStorePermissions',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'ssm:GetParameter',
+        'ssm:GetParameters',
+      ],
+      resources: [
+        `arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/ragtime/github-token`,
+      ],
+    }));
+
     // Grant access to toolkit resources
     toolkitStack.assetsBucket.grantReadWrite(this.codeBuildRole);
     toolkitStack.encryptionKey.grantEncryptDecrypt(this.codeBuildRole);
@@ -102,13 +115,18 @@ export class RagTimePipelineStack extends cdk.Stack {
       webhook: true,
       webhookFilters: [
         codebuild.FilterGroup.inEventOf(codebuild.EventAction.PUSH).andBranchIs('main'),
+        codebuild.FilterGroup.inEventOf(codebuild.EventAction.PULL_REQUEST_CREATED),
         codebuild.FilterGroup.inEventOf(codebuild.EventAction.PULL_REQUEST_UPDATED),
+        codebuild.FilterGroup.inEventOf(codebuild.EventAction.PULL_REQUEST_REOPENED),
       ],
     };
 
-    // Add GitHub token if provided
+    // Add GitHub token for status reporting
     if (githubToken) {
       sourceProps.accessToken = cdk.SecretValue.unsafePlainText(githubToken);
+    } else {
+      // Get GitHub token from SSM Parameter Store
+      sourceProps.accessToken = cdk.SecretValue.ssmSecure('/ragtime/github-token');
     }
 
     this.codeBuildProject = new codebuild.Project(this, 'RagTimeCodeBuildProject', {
