@@ -104,6 +104,19 @@ export class RagTimePipelineStack extends cdk.Stack {
       ],
     }));
 
+    // CodeBuild permissions to update own project environment variables
+    this.codeBuildRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'CodeBuildProjectUpdatePermissions',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'codebuild:UpdateProject',
+        'codebuild:BatchGetProjects',
+      ],
+      resources: [
+        `arn:aws:codebuild:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:project/ragtime-pipeline`,
+      ],
+    }));
+
     // Grant access to toolkit resources
     toolkitStack.assetsBucket.grantReadWrite(this.codeBuildRole);
     toolkitStack.encryptionKey.grantEncryptDecrypt(this.codeBuildRole);

@@ -7,6 +7,7 @@ import { RagTimeCDKToolkitStack } from './ragtime-toolkit-stack';
 import { RagTimeComputeStack } from './nested/ragtime-compute-stack';
 import { RagTimeMonitoringStack } from './nested/ragtime-monitoring-stack';
 import { RagTimeStorageStack } from './nested/ragtime-storage-stack';
+import { RagTimeCoreStack } from './nested/ragtime-core-stack';
 
 export interface RagTimeInfrastructureStackProps extends cdk.StackProps {
   environment: string;
@@ -20,6 +21,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
   public readonly storageStack: RagTimeStorageStack;
   public readonly computeStack: RagTimeComputeStack;
   public readonly monitoringStack: RagTimeMonitoringStack;
+  public readonly coreStack: RagTimeCoreStack;
 
   constructor(scope: Construct, id: string, props: RagTimeInfrastructureStackProps) {
     super(scope, id, props);
@@ -81,13 +83,19 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       ],
     });
 
+    // Nested Stack: Core Services (OpenAI Secrets Management)
+    this.coreStack = new RagTimeCoreStack(this, 'CoreStack', {
+      environment,
+      vpc: this.vpc,
+    });
+
     // Nested Stack: Compute (Lambda + API Gateway)
     this.computeStack = new RagTimeComputeStack(this, 'ComputeStack', {
       environment,
       vpc: this.vpc,
       documentsBucket: this.documentsBucket,
       documentsTable: this.documentsTable,
-      encryptionKey: toolkitStack.encryptionKey,
+      openAISecret: this.coreStack.openAISecret,
     });
 
     // Nested Stack: Monitoring (CloudWatch Canaries)
@@ -121,5 +129,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       value: `${this.computeStack.api.url}health`,
       description: 'Health check endpoint URL',
     });
+
+
   }
 }
