@@ -141,7 +141,9 @@ phases:
             sleep 60
           fi
           
-          # Deploy the CDK stack
+          # Deploy the CDK stack (includes all nested stacks automatically)
+          # Note: Nested stacks are deployed automatically with the parent stack
+          # Alternative: Use 'cdk deploy --all' to deploy all top-level stacks
           cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose
           
           # Verify deployment
