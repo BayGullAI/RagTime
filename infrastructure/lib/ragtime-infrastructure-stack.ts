@@ -84,9 +84,11 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
     });
 
     // Nested Stack: Core Services (OpenSearch + OpenAI Secrets)
+    // Temporarily disable OpenSearch due to AWS service availability issues
     this.coreStack = new RagTimeCoreStack(this, 'CoreStack', {
       environment,
       vpc: this.vpc,
+      enableOpenSearch: false, // Temporarily disabled due to AWS service issues
     });
 
     // Nested Stack: Compute (Lambda + API Gateway)

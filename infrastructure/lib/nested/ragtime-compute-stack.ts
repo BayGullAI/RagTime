@@ -15,7 +15,7 @@ export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
   vpc: ec2.Vpc;
   documentsBucket: s3.Bucket;
   documentsTable: dynamodb.Table;
-  openSearchDomain: opensearch.Domain;
+  openSearchDomain?: opensearch.Domain; // Optional OpenSearch domain
   openAISecret: secretsmanager.Secret;
 }
 
@@ -65,18 +65,20 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     // Note: KMS permissions for encryption key are granted automatically through
     // the bucket and secret grants above, avoiding circular dependency
 
-    // Grant Lambda access to OpenSearch domain
-    lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'es:ESHttpGet',
-        'es:ESHttpPost',
-        'es:ESHttpPut',
-        'es:ESHttpDelete',
-        'es:ESHttpHead',
-      ],
-      resources: [openSearchDomain.domainArn, `${openSearchDomain.domainArn}/*`],
-    }));
+    // Grant Lambda access to OpenSearch domain (if OpenSearch is enabled)
+    if (openSearchDomain) {
+      lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'es:ESHttpGet',
+          'es:ESHttpPost',
+          'es:ESHttpPut',
+          'es:ESHttpDelete',
+          'es:ESHttpHead',
+        ],
+        resources: [openSearchDomain.domainArn, `${openSearchDomain.domainArn}/*`],
+      }));
+    }
 
     // Health Check Lambda Function (let CDK auto-generate name to avoid conflicts)
     this.healthCheckLambda = new lambda.Function(this, 'HealthCheckFunction', {
@@ -122,7 +124,8 @@ export class RagTimeComputeStack extends cdk.NestedStack {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
-        OPENSEARCH_ENDPOINT: openSearchDomain.domainEndpoint,
+        OPENSEARCH_ENDPOINT: openSearchDomain?.domainEndpoint || 'OPENSEARCH_DISABLED',
+        OPENSEARCH_ENABLED: openSearchDomain ? 'true' : 'false',
         OPENAI_SECRET_NAME: openAISecret.secretName,
       },
     });

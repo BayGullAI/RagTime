@@ -9,17 +9,20 @@ import { Construct } from 'constructs';
 export interface RagTimeCoreStackProps extends cdk.NestedStackProps {
   environment: string;
   vpc: ec2.Vpc;
+  enableOpenSearch?: boolean; // Optional flag to enable/disable OpenSearch
 }
 
 export class RagTimeCoreStack extends cdk.NestedStack {
-  public readonly domain: opensearch.Domain;
+  public readonly domain?: opensearch.Domain; // Optional OpenSearch domain
   public readonly domainEndpoint: string;
   public readonly openAISecret: secretsmanager.Secret;
+  public readonly isOpenSearchEnabled: boolean;
 
   constructor(scope: Construct, id: string, props: RagTimeCoreStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc } = props;
+    const { environment, vpc, enableOpenSearch = true } = props;
+    this.isOpenSearchEnabled = enableOpenSearch;
 
     // OpenAI API Key Secret
     this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
@@ -62,73 +65,92 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       'Allow HTTPS to AWS services for managed OpenSearch operations'
     );
 
-    // Create OpenSearch domain with vector search capabilities
-    // Using smaller instance type to improve availability during AWS service issues
-    this.domain = new opensearch.Domain(this, 'VectorSearchDomain', {
-      domainName: `ragtime-vector-search-${environment}`,
-      version: opensearch.EngineVersion.OPENSEARCH_2_7,
-      
-      // Using smaller instance types for better availability
-      capacity: {
-        dataNodes: 1, // Single node for dev to reduce resource constraints
-        dataNodeInstanceType: 't3.small.search', // Smaller, more available instance type
-        masterNodes: 0, // No dedicated masters to reduce resource usage
-      },
-
-      // Reduced storage configuration
-      ebs: {
-        volumeSize: 20, // Smaller volume size
-        volumeType: ec2.EbsDeviceVolumeType.GP2, // Standard GP2 instead of GP3
-      },
-
-      // VPC configuration for security
-      vpc,
-      vpcSubnets: [
-        {
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+    // Conditionally create OpenSearch domain with vector search capabilities
+    // This allows deployment to succeed even when OpenSearch service has issues
+    if (enableOpenSearch) {
+      // Using smaller instance type to improve availability during AWS service issues
+      this.domain = new opensearch.Domain(this, 'VectorSearchDomain', {
+        domainName: `ragtime-vector-search-${environment}`,
+        version: opensearch.EngineVersion.OPENSEARCH_2_7,
+        
+        // Using smaller instance types for better availability
+        capacity: {
+          dataNodes: 1, // Single node for dev to reduce resource constraints
+          dataNodeInstanceType: 't3.small.search', // Smaller, more available instance type
+          masterNodes: 0, // No dedicated masters to reduce resource usage
         },
-      ],
-      securityGroups: [openSearchSecurityGroup],
 
-      // Encryption configuration (using default AWS managed keys)
-      encryptionAtRest: {
-        enabled: true,
-      },
-      nodeToNodeEncryption: true,
-      enforceHttps: true,
+        // Reduced storage configuration
+        ebs: {
+          volumeSize: 20, // Smaller volume size
+          volumeType: ec2.EbsDeviceVolumeType.GP2, // Standard GP2 instead of GP3
+        },
 
-      // Minimal logging configuration to reduce resource usage
-      logging: {
-        slowSearchLogEnabled: false,
-        appLogEnabled: false,
-        slowIndexLogEnabled: false,
-      },
+        // VPC configuration for security
+        vpc,
+        vpcSubnets: [
+          {
+            subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          },
+        ],
+        securityGroups: [openSearchSecurityGroup],
 
-      // Access will be controlled via IAM roles on Lambda functions
-      // No resource-based access policies to follow principle of least privilege
+        // Encryption configuration (using default AWS managed keys)
+        encryptionAtRest: {
+          enabled: true,
+        },
+        nodeToNodeEncryption: true,
+        enforceHttps: true,
 
-      // Removal policy
-      removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-    });
+        // Minimal logging configuration to reduce resource usage
+        logging: {
+          slowSearchLogEnabled: false,
+          appLogEnabled: false,
+          slowIndexLogEnabled: false,
+        },
 
-    // Store domain endpoint for use by other stacks
-    this.domainEndpoint = this.domain.domainEndpoint;
+        // Access will be controlled via IAM roles on Lambda functions
+        // No resource-based access policies to follow principle of least privilege
 
-    // Outputs for reference
+        // Removal policy
+        removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      });
+
+      // Store domain endpoint for use by other stacks
+      this.domainEndpoint = this.domain.domainEndpoint;
+    } else {
+      // When OpenSearch is disabled, provide a placeholder endpoint
+      this.domainEndpoint = `https://opensearch-disabled-${environment}.placeholder.local`;
+      
+      // Add a warning output
+      new cdk.CfnOutput(this, 'OpenSearchWarning', {
+        value: 'OpenSearch is temporarily disabled due to service availability issues',
+        description: 'Warning: Vector search functionality is not available',
+      });
+    }
+
+    // Outputs for reference (conditional based on OpenSearch availability)
     new cdk.CfnOutput(this, 'OpenSearchDomainEndpoint', {
       value: this.domainEndpoint,
-      description: 'OpenSearch domain endpoint URL',
+      description: enableOpenSearch ? 'OpenSearch domain endpoint URL' : 'OpenSearch placeholder endpoint (service disabled)',
     });
 
-    new cdk.CfnOutput(this, 'OpenSearchDomainName', {
-      value: this.domain.domainName,
-      description: 'OpenSearch domain name',
-    });
+    if (enableOpenSearch && this.domain) {
+      new cdk.CfnOutput(this, 'OpenSearchDomainName', {
+        value: this.domain.domainName,
+        description: 'OpenSearch domain name',
+      });
 
-    new cdk.CfnOutput(this, 'OpenSearchDashboardsUrl', {
-      value: `${this.domainEndpoint}/_dashboards/`,
-      description: 'OpenSearch Dashboards URL',
-    });
+      new cdk.CfnOutput(this, 'OpenSearchDashboardsUrl', {
+        value: `${this.domainEndpoint}/_dashboards/`,
+        description: 'OpenSearch Dashboards URL',
+      });
+    } else {
+      new cdk.CfnOutput(this, 'OpenSearchStatus', {
+        value: 'DISABLED',
+        description: 'OpenSearch service is temporarily disabled',
+      });
+    }
 
     new cdk.CfnOutput(this, 'OpenAISecretName', {
       value: this.openAISecret.secretName,
