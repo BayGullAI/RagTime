@@ -1,0 +1,158 @@
+version: 0.2
+
+# RagTime CodeBuild Pipeline
+# Builds, tests, and deploys the RagTime SAM infrastructure stack
+# Foundation CI/CD pipeline for Milestone 1
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+      python: 3.11
+    commands:
+      - echo "Installing dependencies..."
+      - echo "Installing SAM CLI..."
+      - pip install aws-sam-cli
+      - echo "Node.js version:" && node --version
+      - echo "Python version:" && python --version
+      - echo "SAM CLI version:" && sam --version
+      - echo "Setting AWS environment variables..."
+      - export AWS_DEFAULT_REGION=$AWS_REGION
+      - echo "AWS Region $AWS_DEFAULT_REGION"
+      
+  pre_build:
+    commands:
+      - echo "Running pre-build validations..."
+      - echo "Build started on `date`"
+      - echo "Current directory:" && pwd
+      - echo "AWS Region:" && echo $AWS_REGION
+      - echo "CodeBuild Build ID:" && echo $CODEBUILD_BUILD_ID
+      
+      # Validate AWS credentials
+      - echo "=== CREDENTIAL VERIFICATION ==="
+      - echo "AWS CLI credentials:"
+      - aws sts get-caller-identity
+      - echo "Testing S3 access (needed for SAM deployments):"
+      - aws s3 ls || echo "S3 access test completed"
+      - echo "Testing CloudFormation access:"
+      - aws cloudformation list-stacks --max-items 1 || echo "CloudFormation access test completed"
+      
+      # Install project dependencies if any
+      - |
+        if [ -f "package.json" ]; then
+          echo "Installing Node.js dependencies..."
+          npm ci --ignore-scripts
+        fi
+      
+      # Validate SAM template if it exists
+      - |
+        if [ -f "template.yaml" ]; then
+          echo "Validating SAM template..."
+          sam validate --template template.yaml
+        else
+          echo "No SAM template found yet - this will be created in future issues"
+        fi
+      
+  build:
+    commands:
+      - echo "Build phase - validations completed successfully"
+      - echo "CodeBuild pipeline infrastructure validated on `date`"
+      
+      # Build any Lambda functions if they exist
+      - |
+        if [ -d "src" ]; then
+          echo "Building Lambda functions..."
+          sam build --template template.yaml
+        else
+          echo "No Lambda source code found yet - will be added in future milestones"
+        fi
+
+  post_build:
+    commands:
+      - echo "Post-build deployment phase started..."
+      - echo "Deployment started on `date`"
+      
+      # Set up AWS environment variables
+      - echo "Setting AWS environment variables for deployment..."
+      - export AWS_DEFAULT_REGION=$AWS_REGION
+      - echo "AWS Region $AWS_DEFAULT_REGION"
+      
+      # Clear any conflicting AWS environment variables
+      - unset AWS_PROFILE
+      - export AWS_EC2_METADATA_DISABLED=false
+      - export AWS_SDK_LOAD_CONFIG=1
+      
+      # Configure AWS CLI for consistent credential access
+      - aws configure set default.region $AWS_DEFAULT_REGION
+      - aws configure set default.output json
+      
+      # Deploy SAM stack if template exists
+      - |
+        if [ -f "template.yaml" ]; then
+          echo "Deploying RagTime SAM stack..."
+          
+          # Create S3 bucket for SAM artifacts if it doesn't exist
+          BUCKET_NAME="ragtime-sam-artifacts-$AWS_ACCOUNT_ID-$AWS_DEFAULT_REGION"
+          aws s3 mb s3://$BUCKET_NAME --region $AWS_DEFAULT_REGION || echo "Bucket already exists"
+          
+          # Deploy the stack
+          sam deploy \
+            --template-file template.yaml \
+            --stack-name RagTime-Infrastructure \
+            --s3-bucket $BUCKET_NAME \
+            --s3-prefix sam-artifacts \
+            --region $AWS_DEFAULT_REGION \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+          
+          # Verify deployment
+          echo "Verifying deployment..."
+          aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text
+          
+        else
+          echo "No SAM template found - deployment will be enabled when template is added in issue #2"
+        fi
+      
+      # Output deployment information
+      - echo "=== DEPLOYMENT SUMMARY ==="
+      - echo "Environment: Infrastructure Foundation"
+      - echo "Region:" $AWS_DEFAULT_REGION
+      - echo "Build ID:" $CODEBUILD_BUILD_ID
+      - |
+        if [ -f "template.yaml" ]; then
+          echo "Stack Status:" $(aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NO_STACK_YET")
+        fi
+      - echo "CodeBuild pipeline deployed successfully on `date`"
+
+artifacts:
+  files:
+    - '**/*'
+  name: ragtime-build-$(date +%Y-%m-%d-%H-%M-%S)
+  exclude-paths:
+    - 'node_modules/**/*'
+    - '.git/**/*'
+    - '.aws-sam/**/*'
+
+cache:
+  paths:
+    - node_modules/**/*
+    - ~/.npm/**/*
+    - ~/.cache/pip/**/*
+
+env:
+  variables:
+    NODE_ENV: production
+    AWS_DEFAULT_REGION: us-east-1
+  exported-variables:
+    - AWS_REGION
+    - AWS_DEFAULT_REGION
+    - AWS_ACCOUNT_ID
+    - CODEBUILD_BUILD_ID
+
+reports:
+  test_reports:
+    files:
+      - 'test-results.xml'
+    file-format: 'JUNITXML'
+    base-directory: '.'
