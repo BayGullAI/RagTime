@@ -6,7 +6,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
-import * as opensearch from 'aws-cdk-lib/aws-opensearchservice';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
@@ -15,7 +14,6 @@ export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
   vpc: ec2.Vpc;
   documentsBucket: s3.Bucket;
   documentsTable: dynamodb.Table;
-  openSearchDomain?: opensearch.Domain; // Optional OpenSearch domain
   openAISecret: secretsmanager.Secret;
 }
 
@@ -26,7 +24,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc, documentsBucket, documentsTable, openSearchDomain, openAISecret } = props;
+    const { environment, vpc, documentsBucket, documentsTable, openAISecret } = props;
 
     // Security Groups
     const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
@@ -65,20 +63,6 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     // Note: KMS permissions for encryption key are granted automatically through
     // the bucket and secret grants above, avoiding circular dependency
 
-    // Grant Lambda access to OpenSearch domain (if OpenSearch is enabled)
-    if (openSearchDomain) {
-      lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: [
-          'es:ESHttpGet',
-          'es:ESHttpPost',
-          'es:ESHttpPut',
-          'es:ESHttpDelete',
-          'es:ESHttpHead',
-        ],
-        resources: [openSearchDomain.domainArn, `${openSearchDomain.domainArn}/*`],
-      }));
-    }
 
     // Health Check Lambda Function (let CDK auto-generate name to avoid conflicts)
     this.healthCheckLambda = new lambda.Function(this, 'HealthCheckFunction', {
@@ -124,8 +108,6 @@ export class RagTimeComputeStack extends cdk.NestedStack {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
-        OPENSEARCH_ENDPOINT: openSearchDomain?.domainEndpoint || 'OPENSEARCH_DISABLED',
-        OPENSEARCH_ENABLED: openSearchDomain ? 'true' : 'false',
         OPENAI_SECRET_NAME: openAISecret.secretName,
       },
     });

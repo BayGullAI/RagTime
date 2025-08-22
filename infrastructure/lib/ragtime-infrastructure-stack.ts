@@ -83,11 +83,10 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       ],
     });
 
-    // Nested Stack: Core Services (OpenSearch + OpenAI Secrets)
+    // Nested Stack: Core Services (OpenAI Secrets Management)
     this.coreStack = new RagTimeCoreStack(this, 'CoreStack', {
       environment,
       vpc: this.vpc,
-      enableOpenSearch: true, // Enable OpenSearch for vector search capabilities
     });
 
     // Nested Stack: Compute (Lambda + API Gateway)
@@ -96,7 +95,6 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       vpc: this.vpc,
       documentsBucket: this.documentsBucket,
       documentsTable: this.documentsTable,
-      openSearchDomain: this.coreStack.domain,
       openAISecret: this.coreStack.openAISecret,
     });
 
@@ -132,10 +130,6 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       description: 'Health check endpoint URL',
     });
 
-    new cdk.CfnOutput(this, 'OpenSearchEndpoint', {
-      value: this.coreStack.domainEndpoint,
-      description: 'OpenSearch domain endpoint URL',
-    });
 
   }
 }
