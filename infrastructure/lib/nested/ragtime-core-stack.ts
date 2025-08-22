@@ -63,24 +63,22 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     );
 
     // Create OpenSearch domain with vector search capabilities
+    // Using smaller instance type to improve availability during AWS service issues
     this.domain = new opensearch.Domain(this, 'VectorSearchDomain', {
       domainName: `ragtime-vector-search-${environment}`,
       version: opensearch.EngineVersion.OPENSEARCH_2_7,
       
-      // Memory-optimized instances for vector search workloads
+      // Using smaller instance types for better availability
       capacity: {
-        dataNodes: environment === 'prod' ? 3 : 1,
-        dataNodeInstanceType: 'r6g.large.search', // Memory optimized for vector indices
-        masterNodes: environment === 'prod' ? 3 : 0, // Dedicated masters for production
-        masterNodeInstanceType: environment === 'prod' ? 'm6g.medium.search' : undefined,
+        dataNodes: 1, // Single node for dev to reduce resource constraints
+        dataNodeInstanceType: 't3.small.search', // Smaller, more available instance type
+        masterNodes: 0, // No dedicated masters to reduce resource usage
       },
 
-      // Storage configuration
+      // Reduced storage configuration
       ebs: {
-        volumeSize: 100, // 100GB GP3 SSD
-        volumeType: ec2.EbsDeviceVolumeType.GP3,
-        iops: 3000,
-        throughput: 125,
+        volumeSize: 20, // Smaller volume size
+        volumeType: ec2.EbsDeviceVolumeType.GP2, // Standard GP2 instead of GP3
       },
 
       // VPC configuration for security
@@ -99,16 +97,15 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       nodeToNodeEncryption: true,
       enforceHttps: true,
 
-      // Logging configuration
+      // Minimal logging configuration to reduce resource usage
       logging: {
-        slowSearchLogEnabled: true,
-        appLogEnabled: true,
-        slowIndexLogEnabled: true,
+        slowSearchLogEnabled: false,
+        appLogEnabled: false,
+        slowIndexLogEnabled: false,
       },
 
       // Access will be controlled via IAM roles on Lambda functions
       // No resource-based access policies to follow principle of least privilege
-
 
       // Removal policy
       removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
