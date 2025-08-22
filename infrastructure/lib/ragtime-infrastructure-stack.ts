@@ -97,6 +97,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       documentsBucket: this.documentsBucket,
       documentsTable: this.documentsTable,
       encryptionKey: toolkitStack.encryptionKey,
+      openSearchDomain: this.openSearchStack.domain,
     });
 
     // Nested Stack: Monitoring (CloudWatch Canaries)

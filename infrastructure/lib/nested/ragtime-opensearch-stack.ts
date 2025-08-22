@@ -28,31 +28,31 @@ export class RagTimeOpenSearchStack extends cdk.NestedStack {
       allowAllOutbound: false,
     });
 
-    // Allow HTTPS traffic from Lambda functions in VPC (port 443)
+    // Allow HTTPS traffic from Lambda functions in VPC (port 443 only - HTTP disabled)
     openSearchSecurityGroup.addIngressRule(
       ec2.Peer.ipv4(vpc.vpcCidrBlock),
       ec2.Port.tcp(443),
       'Allow HTTPS traffic from VPC for OpenSearch API access'
     );
 
-    // Allow HTTP traffic from Lambda functions in VPC (port 80) - OpenSearch also uses this
-    openSearchSecurityGroup.addIngressRule(
+    // Restricted egress - only HTTPS for AWS services and internal communication
+    openSearchSecurityGroup.addEgressRule(
       ec2.Peer.ipv4(vpc.vpcCidrBlock),
-      ec2.Port.tcp(80),
-      'Allow HTTP traffic from VPC for OpenSearch API access'
+      ec2.Port.tcp(443),
+      'Allow HTTPS within VPC for cluster communication'
     );
 
-    // Allow egress for domain communication
+    // Allow HTTPS to AWS services (for managed service communication)
     openSearchSecurityGroup.addEgressRule(
       ec2.Peer.anyIpv4(),
-      ec2.Port.allTcp(),
-      'Allow all outbound traffic for OpenSearch domain'
+      ec2.Port.tcp(443),
+      'Allow HTTPS to AWS services for managed OpenSearch operations'
     );
 
     // Create OpenSearch domain with vector search capabilities
     this.domain = new opensearch.Domain(this, 'VectorSearchDomain', {
       domainName: `ragtime-vector-search-${environment}`,
-      version: opensearch.EngineVersion.OPENSEARCH_2_3,
+      version: opensearch.EngineVersion.OPENSEARCH_2_7,
       
       // Memory-optimized instances for vector search workloads
       capacity: {
@@ -94,25 +94,8 @@ export class RagTimeOpenSearchStack extends cdk.NestedStack {
         slowIndexLogEnabled: true,
       },
 
-      // Access policy for Lambda functions
-      accessPolicies: [
-        new iam.PolicyStatement({
-          principals: [new iam.AnyPrincipal()],
-          actions: [
-            'es:ESHttpGet',
-            'es:ESHttpPost',
-            'es:ESHttpPut',
-            'es:ESHttpDelete',
-            'es:ESHttpHead',
-          ],
-          resources: [`arn:aws:es:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:domain/ragtime-vector-search-${environment}/*`],
-          conditions: {
-            IpAddress: {
-              'aws:SourceIp': [vpc.vpcCidrBlock],
-            },
-          },
-        }),
-      ],
+      // Access will be controlled via IAM roles on Lambda functions
+      // No resource-based access policies to follow principle of least privilege
 
 
       // Removal policy

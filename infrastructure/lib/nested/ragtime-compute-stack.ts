@@ -6,6 +6,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as opensearch from 'aws-cdk-lib/aws-opensearchservice';
 import { Construct } from 'constructs';
 
 export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
@@ -14,6 +15,7 @@ export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
   documentsBucket: s3.Bucket;
   documentsTable: dynamodb.Table;
   encryptionKey: kms.Key;
+  openSearchDomain: opensearch.Domain;
 }
 
 export class RagTimeComputeStack extends cdk.NestedStack {
@@ -23,7 +25,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc, documentsBucket, documentsTable, encryptionKey } = props;
+    const { environment, vpc, documentsBucket, documentsTable, encryptionKey, openSearchDomain } = props;
 
     // Security Groups
     const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
@@ -58,6 +60,19 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     documentsBucket.grantReadWrite(lambdaExecutionRole);
     documentsTable.grantReadWriteData(lambdaExecutionRole);
     encryptionKey.grantEncryptDecrypt(lambdaExecutionRole);
+
+    // Grant Lambda access to OpenSearch domain
+    lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'es:ESHttpGet',
+        'es:ESHttpPost',
+        'es:ESHttpPut',
+        'es:ESHttpDelete',
+        'es:ESHttpHead',
+      ],
+      resources: [openSearchDomain.domainArn, `${openSearchDomain.domainArn}/*`],
+    }));
 
     // Health Check Lambda Function (let CDK auto-generate name to avoid conflicts)
     this.healthCheckLambda = new lambda.Function(this, 'HealthCheckFunction', {
@@ -103,6 +118,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+        OPENSEARCH_ENDPOINT: openSearchDomain.domainEndpoint,
       },
     });
 
