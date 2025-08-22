@@ -3,22 +3,36 @@ import * as opensearch from 'aws-cdk-lib/aws-opensearchservice';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
-export interface RagTimeOpenSearchStackProps extends cdk.NestedStackProps {
+export interface RagTimeCoreStackProps extends cdk.NestedStackProps {
   environment: string;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
 }
 
-export class RagTimeOpenSearchStack extends cdk.NestedStack {
+export class RagTimeCoreStack extends cdk.NestedStack {
   public readonly domain: opensearch.Domain;
   public readonly domainEndpoint: string;
+  public readonly openAISecret: secretsmanager.Secret;
 
-  constructor(scope: Construct, id: string, props: RagTimeOpenSearchStackProps) {
+  constructor(scope: Construct, id: string, props: RagTimeCoreStackProps) {
     super(scope, id, props);
 
     const { environment, vpc, encryptionKey } = props;
+
+    // OpenAI API Key Secret
+    this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
+      secretName: `ragtime-openai-api-key-${environment}`,
+      description: 'OpenAI API key for embedding generation',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ api_key: '' }),
+        generateStringKey: 'api_key',
+        excludeCharacters: '"@/\\\'',
+      },
+      encryptionKey: encryptionKey,
+    });
 
     // Security group for OpenSearch domain
     const openSearchSecurityGroup = new ec2.SecurityGroup(this, 'OpenSearchSecurityGroup', {
@@ -109,19 +123,21 @@ export class RagTimeOpenSearchStack extends cdk.NestedStack {
     new cdk.CfnOutput(this, 'OpenSearchDomainEndpoint', {
       value: this.domainEndpoint,
       description: 'OpenSearch domain endpoint URL',
-      exportName: `RagTimeOpenSearchEndpoint-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'OpenSearchDomainName', {
       value: this.domain.domainName,
       description: 'OpenSearch domain name',
-      exportName: `RagTimeOpenSearchDomain-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'OpenSearchDashboardsUrl', {
       value: `${this.domainEndpoint}/_dashboards/`,
       description: 'OpenSearch Dashboards URL',
-      exportName: `RagTimeOpenSearchDashboards-${environment}`,
+    });
+
+    new cdk.CfnOutput(this, 'OpenAISecretName', {
+      value: this.openAISecret.secretName,
+      description: 'OpenAI API key secret name',
     });
   }
 }

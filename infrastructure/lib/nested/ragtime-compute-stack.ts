@@ -7,6 +7,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as opensearch from 'aws-cdk-lib/aws-opensearchservice';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
@@ -16,6 +17,7 @@ export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
   documentsTable: dynamodb.Table;
   encryptionKey: kms.Key;
   openSearchDomain: opensearch.Domain;
+  openAISecret: secretsmanager.Secret;
 }
 
 export class RagTimeComputeStack extends cdk.NestedStack {
@@ -25,7 +27,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc, documentsBucket, documentsTable, encryptionKey, openSearchDomain } = props;
+    const { environment, vpc, documentsBucket, documentsTable, encryptionKey, openSearchDomain, openAISecret } = props;
 
     // Security Groups
     const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
@@ -60,6 +62,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     documentsBucket.grantReadWrite(lambdaExecutionRole);
     documentsTable.grantReadWriteData(lambdaExecutionRole);
     encryptionKey.grantEncryptDecrypt(lambdaExecutionRole);
+    openAISecret.grantRead(lambdaExecutionRole);
 
     // Grant Lambda access to OpenSearch domain
     lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
@@ -119,6 +122,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
         OPENSEARCH_ENDPOINT: openSearchDomain.domainEndpoint,
+        OPENAI_SECRET_NAME: openAISecret.secretName,
       },
     });
 

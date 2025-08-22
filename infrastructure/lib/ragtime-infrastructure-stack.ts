@@ -7,7 +7,7 @@ import { RagTimeCDKToolkitStack } from './ragtime-toolkit-stack';
 import { RagTimeComputeStack } from './nested/ragtime-compute-stack';
 import { RagTimeMonitoringStack } from './nested/ragtime-monitoring-stack';
 import { RagTimeStorageStack } from './nested/ragtime-storage-stack';
-import { RagTimeOpenSearchStack } from './nested/ragtime-opensearch-stack';
+import { RagTimeCoreStack } from './nested/ragtime-core-stack';
 
 export interface RagTimeInfrastructureStackProps extends cdk.StackProps {
   environment: string;
@@ -21,7 +21,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
   public readonly storageStack: RagTimeStorageStack;
   public readonly computeStack: RagTimeComputeStack;
   public readonly monitoringStack: RagTimeMonitoringStack;
-  public readonly openSearchStack: RagTimeOpenSearchStack;
+  public readonly coreStack: RagTimeCoreStack;
 
   constructor(scope: Construct, id: string, props: RagTimeInfrastructureStackProps) {
     super(scope, id, props);
@@ -83,8 +83,8 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       ],
     });
 
-    // Nested Stack: OpenSearch Service for Vector Search
-    this.openSearchStack = new RagTimeOpenSearchStack(this, 'OpenSearchStack', {
+    // Nested Stack: Core Services (OpenSearch + OpenAI Secrets)
+    this.coreStack = new RagTimeCoreStack(this, 'CoreStack', {
       environment,
       vpc: this.vpc,
       encryptionKey: toolkitStack.encryptionKey,
@@ -97,7 +97,8 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       documentsBucket: this.documentsBucket,
       documentsTable: this.documentsTable,
       encryptionKey: toolkitStack.encryptionKey,
-      openSearchDomain: this.openSearchStack.domain,
+      openSearchDomain: this.coreStack.domain,
+      openAISecret: this.coreStack.openAISecret,
     });
 
     // Nested Stack: Monitoring (CloudWatch Canaries)
@@ -130,6 +131,11 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'HealthCheckEndpoint', {
       value: `${this.computeStack.api.url}health`,
       description: 'Health check endpoint URL',
+    });
+
+    new cdk.CfnOutput(this, 'OpenSearchEndpoint', {
+      value: this.coreStack.domainEndpoint,
+      description: 'OpenSearch domain endpoint URL',
     });
 
   }
