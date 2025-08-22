@@ -1,0 +1,144 @@
+import * as cdk from 'aws-cdk-lib';
+import * as opensearch from 'aws-cdk-lib/aws-opensearchservice';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
+import { Construct } from 'constructs';
+
+export interface RagTimeOpenSearchStackProps extends cdk.NestedStackProps {
+  environment: string;
+  vpc: ec2.Vpc;
+  encryptionKey: kms.Key;
+}
+
+export class RagTimeOpenSearchStack extends cdk.NestedStack {
+  public readonly domain: opensearch.Domain;
+  public readonly domainEndpoint: string;
+
+  constructor(scope: Construct, id: string, props: RagTimeOpenSearchStackProps) {
+    super(scope, id, props);
+
+    const { environment, vpc, encryptionKey } = props;
+
+    // Security group for OpenSearch domain
+    const openSearchSecurityGroup = new ec2.SecurityGroup(this, 'OpenSearchSecurityGroup', {
+      securityGroupName: `ragtime-opensearch-sg-${environment}`,
+      vpc,
+      description: 'Security group for OpenSearch domain',
+      allowAllOutbound: false,
+    });
+
+    // Allow HTTPS traffic from Lambda functions in VPC (port 443)
+    openSearchSecurityGroup.addIngressRule(
+      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Port.tcp(443),
+      'Allow HTTPS traffic from VPC for OpenSearch API access'
+    );
+
+    // Allow HTTP traffic from Lambda functions in VPC (port 80) - OpenSearch also uses this
+    openSearchSecurityGroup.addIngressRule(
+      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Port.tcp(80),
+      'Allow HTTP traffic from VPC for OpenSearch API access'
+    );
+
+    // Allow egress for domain communication
+    openSearchSecurityGroup.addEgressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.allTcp(),
+      'Allow all outbound traffic for OpenSearch domain'
+    );
+
+    // Create OpenSearch domain with vector search capabilities
+    this.domain = new opensearch.Domain(this, 'VectorSearchDomain', {
+      domainName: `ragtime-vector-search-${environment}`,
+      version: opensearch.EngineVersion.OPENSEARCH_2_3,
+      
+      // Memory-optimized instances for vector search workloads
+      capacity: {
+        dataNodes: environment === 'prod' ? 3 : 1,
+        dataNodeInstanceType: 'r6g.large.search', // Memory optimized for vector indices
+        masterNodes: environment === 'prod' ? 3 : 0, // Dedicated masters for production
+        masterNodeInstanceType: environment === 'prod' ? 'm6g.medium.search' : undefined,
+      },
+
+      // Storage configuration
+      ebs: {
+        volumeSize: 100, // 100GB GP3 SSD
+        volumeType: ec2.EbsDeviceVolumeType.GP3,
+        iops: 3000,
+        throughput: 125,
+      },
+
+      // VPC configuration for security
+      vpc,
+      vpcSubnets: [
+        {
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        },
+      ],
+      securityGroups: [openSearchSecurityGroup],
+
+      // Encryption configuration
+      encryptionAtRest: {
+        enabled: true,
+        kmsKey: encryptionKey,
+      },
+      nodeToNodeEncryption: true,
+      enforceHttps: true,
+
+      // Logging configuration
+      logging: {
+        slowSearchLogEnabled: true,
+        appLogEnabled: true,
+        slowIndexLogEnabled: true,
+      },
+
+      // Access policy for Lambda functions
+      accessPolicies: [
+        new iam.PolicyStatement({
+          principals: [new iam.AnyPrincipal()],
+          actions: [
+            'es:ESHttpGet',
+            'es:ESHttpPost',
+            'es:ESHttpPut',
+            'es:ESHttpDelete',
+            'es:ESHttpHead',
+          ],
+          resources: [`arn:aws:es:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:domain/ragtime-vector-search-${environment}/*`],
+          conditions: {
+            IpAddress: {
+              'aws:SourceIp': [vpc.vpcCidrBlock],
+            },
+          },
+        }),
+      ],
+
+
+      // Removal policy
+      removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Store domain endpoint for use by other stacks
+    this.domainEndpoint = this.domain.domainEndpoint;
+
+    // Outputs for reference
+    new cdk.CfnOutput(this, 'OpenSearchDomainEndpoint', {
+      value: this.domainEndpoint,
+      description: 'OpenSearch domain endpoint URL',
+      exportName: `RagTimeOpenSearchEndpoint-${environment}`,
+    });
+
+    new cdk.CfnOutput(this, 'OpenSearchDomainName', {
+      value: this.domain.domainName,
+      description: 'OpenSearch domain name',
+      exportName: `RagTimeOpenSearchDomain-${environment}`,
+    });
+
+    new cdk.CfnOutput(this, 'OpenSearchDashboardsUrl', {
+      value: `${this.domainEndpoint}/_dashboards/`,
+      description: 'OpenSearch Dashboards URL',
+      exportName: `RagTimeOpenSearchDashboards-${environment}`,
+    });
+  }
+}
