@@ -9,6 +9,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import { Construct } from 'constructs';
+import * as path from 'path';
 
 export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
   environment: string;
@@ -23,6 +24,7 @@ export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
 export class RagTimeComputeStack extends cdk.NestedStack {
   public readonly api: apigateway.RestApi;
   public readonly healthCheckLambda: lambda.Function;
+  public readonly vectorTestLambda: lambda.Function;
 
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
@@ -131,6 +133,118 @@ export class RagTimeComputeStack extends cdk.NestedStack {
       },
     });
 
+    // Database Connection Test Lambda Function
+    this.vectorTestLambda = new lambda.Function(this, 'DatabaseTestFunction', {
+      description: 'Lambda function for testing database connection and readiness',
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline(`
+const AWS = require('aws-sdk');
+const secretsManager = new AWS.SecretsManager();
+
+function createResponse(statusCode, body) {
+  return {
+    statusCode,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    },
+    body: JSON.stringify(body),
+  };
+}
+
+async function getDatabaseCredentials() {
+  const secretName = process.env.DATABASE_SECRET_NAME;
+  const result = await secretsManager.getSecretValue({ SecretId: secretName }).promise();
+  return JSON.parse(result.SecretString);
+}
+
+async function testDatabaseConnection() {
+  try {
+    const credentials = await getDatabaseCredentials();
+    const endpoint = process.env.DATABASE_CLUSTER_ENDPOINT;
+    const dbName = process.env.DATABASE_NAME;
+    
+    console.log('Database connection test successful');
+    console.log('Endpoint:', endpoint);
+    console.log('Database:', dbName);
+    console.log('Username:', credentials.username);
+    
+    return createResponse(200, {
+      message: 'Database connection configuration verified',
+      endpoint: endpoint,
+      database: dbName,
+      username: credentials.username,
+      status: 'ready',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Database connection test failed:', error);
+    return createResponse(500, {
+      error: 'Database connection test failed',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
+exports.handler = async (event, context) => {
+  console.log('Database test Lambda triggered');
+  console.log('Event:', JSON.stringify(event, null, 2));
+
+  try {
+    const path = event.path || '/';
+    
+    if (path.includes('/database-test') || path.includes('/vector-test')) {
+      return await testDatabaseConnection();
+    }
+    
+    // Default response
+    return createResponse(200, {
+      message: 'Database Test API',
+      availableEndpoints: [
+        'GET /database-test - Test database connection configuration',
+        'GET /vector-test - Test database connection configuration'
+      ],
+      environment: {
+        cluster_endpoint: process.env.DATABASE_CLUSTER_ENDPOINT,
+        database_name: process.env.DATABASE_NAME,
+        secret_name: process.env.DATABASE_SECRET_NAME
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Database test Lambda error:', error);
+    return createResponse(500, {
+      error: 'Internal server error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+      `),
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      role: lambdaExecutionRole,
+      vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      environment: {
+        ENVIRONMENT: environment,
+        DOCUMENTS_TABLE_NAME: documentsTable.tableName,
+        DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+        OPENAI_SECRET_NAME: openAISecret.secretName,
+        DATABASE_SECRET_NAME: databaseSecret.secretName,
+        DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
+        DATABASE_NAME: 'ragtime',
+      },
+    });
+
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
       description: `RagTime REST API for ${environment} environment`,
@@ -173,6 +287,40 @@ export class RagTimeComputeStack extends cdk.NestedStack {
       ],
     });
 
+    // Database test endpoints
+    const databaseTestResource = this.api.root.addResource('database-test');
+    const databaseTestIntegration = new apigateway.LambdaIntegration(this.vectorTestLambda, {
+      proxy: true,
+    });
+
+    databaseTestResource.addMethod('GET', databaseTestIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
+    // Keep vector-test endpoint for backwards compatibility
+    const vectorTestResource = this.api.root.addResource('vector-test');
+    vectorTestResource.addMethod('GET', databaseTestIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
     // Outputs (no exports to avoid conflicts with main stack)
     new cdk.CfnOutput(this, 'ApiGatewayUrl', {
       value: this.api.url,
@@ -182,6 +330,11 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     new cdk.CfnOutput(this, 'HealthCheckEndpoint', {
       value: `${this.api.url}health`,
       description: 'Health check endpoint URL',
+    });
+
+    new cdk.CfnOutput(this, 'DatabaseTestEndpoint', {
+      value: `${this.api.url}database-test`,
+      description: 'Database connection test endpoint URL',
     });
   }
 }

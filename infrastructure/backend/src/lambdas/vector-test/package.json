@@ -1,0 +1,20 @@
+{
+  "name": "vector-test-lambda",
+  "version": "1.0.0",
+  "description": "Lambda function to test vector operations and CRUD functionality",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "pg": "^8.11.3",
+    "@types/pg": "^8.10.2",
+    "aws-sdk": "^2.1489.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.119",
+    "@types/node": "^18.17.0",
+    "typescript": "^5.1.6"
+  }
+}
