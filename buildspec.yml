@@ -120,8 +120,8 @@ phases:
       - aws configure set default.region $AWS_DEFAULT_REGION
       - aws configure set default.output json
       
-      # Note: OPENAI_API_KEY should be set as environment variable in CodeBuild project
-      # Use: aws codebuild update-project --name ragtime-pipeline --environment '{"environmentVariables":[...existing vars..., {"name":"OPENAI_API_KEY","value":"your-key-here"}]}'
+      # Note: OPENAI_API_KEY is set as environment variable in CodeBuild project
+      # The OpenAI secret will be created with the actual API key from this environment variable
       
       # Bootstrap CDK with conflict resolution
       - echo "Validating CDK bootstrap environment..."
