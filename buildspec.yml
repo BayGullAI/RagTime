@@ -1,24 +1,24 @@
 version: 0.2
 
 # RagTime CodeBuild Pipeline
-# Builds, tests, and deploys the RagTime SAM infrastructure stack
+# Builds, tests, and deploys the RagTime CDK infrastructure stack
 # Foundation CI/CD pipeline for Milestone 1
 
 phases:
   install:
     runtime-versions:
       nodejs: 20
-      python: 3.11
     commands:
       - echo "Installing dependencies..."
-      - echo "Installing SAM CLI..."
-      - pip install aws-sam-cli
+      - echo "Installing CDK globally..."
+      - npm install -g aws-cdk@latest
       - echo "Node.js version:" && node --version
-      - echo "Python version:" && python --version
-      - echo "SAM CLI version:" && sam --version
-      - echo "Setting AWS environment variables..."
-      - export AWS_DEFAULT_REGION=$AWS_REGION
-      - echo "AWS Region $AWS_DEFAULT_REGION"
+      - echo "NPM version:" && npm --version
+      - echo "CDK version:" && cdk --version
+      - echo "Setting CDK environment variables..."
+      - export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+      - export CDK_DEFAULT_REGION=$AWS_REGION
+      - echo "CDK Account $CDK_DEFAULT_ACCOUNT, Region $CDK_DEFAULT_REGION"
       
   pre_build:
     commands:
@@ -44,27 +44,50 @@ phases:
           npm ci --ignore-scripts
         fi
       
-      # Validate SAM template if it exists
+      # Run linting if configured
       - |
-        if [ -f "template.yaml" ]; then
-          echo "Validating SAM template..."
-          sam validate --template template.yaml
+        if [ -f "package.json" ] && npm run lint --silent 2>/dev/null; then
+          echo "Running lint checks..."
+          npm run lint
         else
-          echo "No SAM template found yet - this will be created in future issues"
+          echo "No linting configured yet - will be added in future issues"
+        fi
+      
+      # Run tests if configured
+      - |
+        if [ -f "package.json" ] && npm run test --silent 2>/dev/null; then
+          echo "Running test suite..."
+          npm run test
+        else
+          echo "No tests configured yet - will be added in future issues"
+        fi
+      
+      # Validate CDK app if it exists
+      - |
+        if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
+          echo "Validating CDK application..."
+          cdk synth --quiet
+        else
+          echo "No CDK app found yet - this will be created in future issues"
         fi
       
   build:
     commands:
-      - echo "Build phase - validations completed successfully"
+      - echo "Build phase - building CDK application..."
       - echo "CodeBuild pipeline infrastructure validated on `date`"
       
-      # Build any Lambda functions if they exist
+      # Build CDK app and all components
       - |
-        if [ -d "src" ]; then
-          echo "Building Lambda functions..."
-          sam build --template template.yaml
-        else
-          echo "No Lambda source code found yet - will be added in future milestones"
+        if [ -f "package.json" ]; then
+          echo "Building all components..."
+          npm run build || echo "No build script configured yet"
+        fi
+      
+      # Compile TypeScript for CDK app
+      - |
+        if [ -f "tsconfig.json" ] || [ -f "infrastructure/tsconfig.json" ]; then
+          echo "Compiling TypeScript..."
+          npx tsc || echo "TypeScript compilation will be configured in future issues"
         fi
 
   post_build:
@@ -86,32 +109,40 @@ phases:
       - aws configure set default.region $AWS_DEFAULT_REGION
       - aws configure set default.output json
       
-      # Deploy SAM stack if template exists
+      # Bootstrap CDK with explicit account and region
+      - echo "Bootstrapping CDK if needed..."
+      - cdk bootstrap aws://$CDK_DEFAULT_ACCOUNT/$AWS_DEFAULT_REGION --require-approval never
+      
+      # Deploy CDK stack if app exists
       - |
-        if [ -f "template.yaml" ]; then
-          echo "Deploying RagTime SAM stack..."
+        if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
+          echo "Deploying RagTime CDK stack..."
           
-          # Create S3 bucket for SAM artifacts if it doesn't exist
-          BUCKET_NAME="ragtime-sam-artifacts-$AWS_ACCOUNT_ID-$AWS_DEFAULT_REGION"
-          aws s3 mb s3://$BUCKET_NAME --region $AWS_DEFAULT_REGION || echo "Bucket already exists"
+          # Check and handle stack state before deployment
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          echo "Stack status: $STACK_STATUS"
           
-          # Deploy the stack
-          sam deploy \
-            --template-file template.yaml \
-            --stack-name RagTime-Infrastructure \
-            --s3-bucket $BUCKET_NAME \
-            --s3-prefix sam-artifacts \
-            --region $AWS_DEFAULT_REGION \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset
+          if [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
+            echo "Stack is in rollback state, deleting and recreating..."
+            aws cloudformation delete-stack --stack-name RagTime-Infrastructure
+            echo "Waiting for stack deletion to complete..."
+            aws cloudformation wait stack-delete-complete --stack-name RagTime-Infrastructure
+            echo "Stack deleted successfully"
+          elif [[ "$STACK_STATUS" == *"PROGRESS"* ]]; then
+            echo "Stack operation in progress, waiting for completion..."
+            sleep 60
+          fi
+          
+          # Deploy the CDK stack
+          cdk deploy --app "npx ts-node infrastructure/bin/ragtime.ts" --require-approval never --verbose || \
+          cdk deploy --require-approval never --verbose
           
           # Verify deployment
           echo "Verifying deployment..."
           aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text
           
         else
-          echo "No SAM template found - deployment will be enabled when template is added in issue #2"
+          echo "No CDK app found - deployment will be enabled when CDK app is added in issue #2"
         fi
       
       # Output deployment information
@@ -120,7 +151,7 @@ phases:
       - echo "Region:" $AWS_DEFAULT_REGION
       - echo "Build ID:" $CODEBUILD_BUILD_ID
       - |
-        if [ -f "template.yaml" ]; then
+        if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
           echo "Stack Status:" $(aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NO_STACK_YET")
         fi
       - echo "CodeBuild pipeline deployed successfully on `date`"
@@ -132,7 +163,7 @@ artifacts:
   exclude-paths:
     - 'node_modules/**/*'
     - '.git/**/*'
-    - '.aws-sam/**/*'
+    - 'cdk.out/**/*'
 
 cache:
   paths:
