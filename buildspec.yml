@@ -146,9 +146,62 @@ phases:
           # Alternative: Use 'cdk deploy --all' to deploy all top-level stacks
           cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose
           
-          # Verify deployment
-          echo "Verifying deployment..."
-          aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text
+          # Verify deployment succeeded - fail build if stack is in rollback or failed state
+          echo "Verifying deployment status..."
+          FINAL_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text)
+          echo "Final stack status: $FINAL_STATUS"
+          
+          case "$FINAL_STATUS" in
+            "CREATE_COMPLETE"|"UPDATE_COMPLETE")
+              echo "✅ Stack deployment successful: $FINAL_STATUS"
+              ;;
+            "ROLLBACK_COMPLETE"|"UPDATE_ROLLBACK_COMPLETE"|"CREATE_FAILED"|"UPDATE_FAILED"|"DELETE_FAILED")
+              echo "❌ Stack deployment failed: $FINAL_STATUS"
+              echo "Build failing due to CloudFormation deployment failure"
+              exit 1
+              ;;
+            *"ROLLBACK"*|*"FAILED"*)
+              echo "❌ Stack deployment failed: $FINAL_STATUS"
+              echo "Build failing due to CloudFormation deployment failure"
+              exit 1
+              ;;
+            *)
+              echo "⚠️  Unknown stack status: $FINAL_STATUS"
+              echo "Build failing due to unexpected stack status"
+              exit 1
+              ;;
+          esac
+          
+          # Verify nested stacks are also successful
+          echo "Checking nested stacks status..."
+          NESTED_STACKS=$(aws cloudformation describe-stack-resources --stack-name $STACK_NAME --query 'StackResources[?ResourceType==`AWS::CloudFormation::Stack`].PhysicalResourceId' --output text)
+          
+          if [ -n "$NESTED_STACKS" ]; then
+            for NESTED_STACK in $NESTED_STACKS; do
+              if [ "$NESTED_STACK" != "None" ] && [ -n "$NESTED_STACK" ]; then
+                NESTED_STATUS=$(aws cloudformation describe-stacks --stack-name $NESTED_STACK --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "UNKNOWN")
+                echo "Nested stack $NESTED_STACK status: $NESTED_STATUS"
+                
+                case "$NESTED_STATUS" in
+                  "CREATE_COMPLETE"|"UPDATE_COMPLETE")
+                    echo "✅ Nested stack successful: $NESTED_STACK"
+                    ;;
+                  "ROLLBACK_COMPLETE"|"UPDATE_ROLLBACK_COMPLETE"|"CREATE_FAILED"|"UPDATE_FAILED"|"DELETE_FAILED"|*"ROLLBACK"*|*"FAILED"*)
+                    echo "❌ Nested stack failed: $NESTED_STACK ($NESTED_STATUS)"
+                    echo "Build failing due to nested stack deployment failure"
+                    exit 1
+                    ;;
+                  *)
+                    echo "⚠️  Unknown nested stack status: $NESTED_STACK ($NESTED_STATUS)"
+                    echo "Build failing due to unexpected nested stack status"
+                    exit 1
+                    ;;
+                esac
+              fi
+            done
+          else
+            echo "No nested stacks found"
+          fi
           
         else
           echo "No CDK app found - deployment will be enabled when CDK app is added in issue #2"
