@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+/// <reference types="node" />
+// Fixed TypeScript compilation for Node.js globals
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { RagTimeCDKToolkitStack } from '../lib/ragtime-toolkit-stack';

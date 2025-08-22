@@ -70,6 +70,8 @@ phases:
       - |
         if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
           echo "Validating CDK application..."
+          echo "Building TypeScript first..."
+          npm run build
           cdk synth --quiet
         else
           echo "No CDK app found yet - this will be created in future issues"
@@ -123,14 +125,16 @@ phases:
           echo "Deploying RagTime CDK stack..."
           
           # Check and handle stack state before deployment
-          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+          STACK_NAME="RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT"
+          echo "Deploying stack: $STACK_NAME"
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
           echo "Stack status: $STACK_STATUS"
           
           if [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
             echo "Stack is in rollback state, deleting and recreating..."
-            aws cloudformation delete-stack --stack-name RagTime-Infrastructure
+            aws cloudformation delete-stack --stack-name $STACK_NAME
             echo "Waiting for stack deletion to complete..."
-            aws cloudformation wait stack-delete-complete --stack-name RagTime-Infrastructure
+            aws cloudformation wait stack-delete-complete --stack-name $STACK_NAME
             echo "Stack deleted successfully"
           elif [[ "$STACK_STATUS" == *"PROGRESS"* ]]; then
             echo "Stack operation in progress, waiting for completion..."
@@ -138,12 +142,11 @@ phases:
           fi
           
           # Deploy the CDK stack
-          cdk deploy --app "npx ts-node infrastructure/bin/ragtime.ts" --require-approval never --verbose || \
-          cdk deploy --require-approval never --verbose
+          cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose
           
           # Verify deployment
           echo "Verifying deployment..."
-          aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text
+          aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text
           
         else
           echo "No CDK app found - deployment will be enabled when CDK app is added in issue #2"
@@ -156,7 +159,8 @@ phases:
       - echo "Build ID $CODEBUILD_BUILD_ID"
       - |
         if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
-          echo "Stack Status: $(aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NO_STACK_YET')"
+          STACK_NAME="RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT"
+          echo "Stack Status: $(aws cloudformation describe-stacks --stack-name $STACK_NAME --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NO_STACK_YET')"
         fi
       - echo "CodeBuild pipeline deployed successfully on $(date)"
 
