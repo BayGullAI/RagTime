@@ -70,6 +70,8 @@ phases:
       - |
         if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
           echo "Validating CDK application..."
+          echo "Building TypeScript first..."
+          npm run build
           cdk synth --quiet
         else
           echo "No CDK app found yet - this will be created in future issues"

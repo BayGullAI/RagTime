@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/// <reference types="node" />
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { RagTimeCDKToolkitStack } from '../lib/ragtime-toolkit-stack';
