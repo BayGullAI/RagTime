@@ -91,7 +91,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
             },
             {
               storageClass: s3.StorageClass.GLACIER,
-              transitionAfter: cdk.Duration.days(90),
+              transitionAfter: cdk.Duration.days(120),
             },
           ],
         },
