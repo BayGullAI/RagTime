@@ -131,7 +131,7 @@ export class RagTimePipelineStack extends cdk.Stack {
 
     this.codeBuildProject = new codebuild.Project(this, 'RagTimeCodeBuildProject', {
       projectName: 'ragtime-pipeline',
-      description: 'RagTime CI/CD pipeline for all environments',
+      description: 'RagTime CI/CD pipeline for all environments with PR support',
       source: codebuild.Source.gitHub(sourceProps),
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
