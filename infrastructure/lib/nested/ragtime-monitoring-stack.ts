@@ -373,23 +373,20 @@ exports.handler = async () => {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Outputs
+    // Outputs (no exports to avoid circular dependencies with toolkit stack)
     new cdk.CfnOutput(this, 'CanaryArtifactsBucketName', {
       value: canaryArtifactsBucket.bucketName,
       description: 'S3 bucket for canary artifacts',
-      exportName: `RagTimeCanaryArtifactsBucket-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'HealthCheckCanaryName', {
       value: this.healthCheckCanary.canaryName,
       description: 'Name of the health check canary',
-      exportName: `RagTimeHealthCheckCanary-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'CorsTestCanaryName', {
       value: this.corsTestCanary.canaryName,
       description: 'Name of the CORS test canary',
-      exportName: `RagTimeCorsTestCanary-${environment}`,
     });
   }
 }

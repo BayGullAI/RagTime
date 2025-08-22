@@ -120,23 +120,20 @@ export class RagTimeCDKToolkitStack extends cdk.Stack {
       resources: ['*'],
     }));
 
-    // Outputs
+    // Outputs (no exports to avoid circular dependencies with infrastructure stack)
     new cdk.CfnOutput(this, 'AssetsBucketName', {
       value: this.assetsBucket.bucketName,
       description: 'Name of the CDK assets bucket',
-      exportName: 'RagTimeAssetsBucketName',
     });
 
     new cdk.CfnOutput(this, 'DeploymentRoleArn', {
       value: this.deploymentRole.roleArn,
       description: 'ARN of the CDK deployment role',
-      exportName: 'RagTimeDeploymentRoleArn',
     });
 
     new cdk.CfnOutput(this, 'EncryptionKeyArn', {
       value: this.encryptionKey.keyArn,
       description: 'ARN of the deployment encryption key',
-      exportName: 'RagTimeEncryptionKeyArn',
     });
   }
 }

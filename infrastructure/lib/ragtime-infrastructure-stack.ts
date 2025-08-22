@@ -6,6 +6,7 @@ import { Construct } from 'constructs';
 import { RagTimeCDKToolkitStack } from './ragtime-toolkit-stack';
 import { RagTimeComputeStack } from './nested/ragtime-compute-stack';
 import { RagTimeMonitoringStack } from './nested/ragtime-monitoring-stack';
+import { RagTimeStorageStack } from './nested/ragtime-storage-stack';
 
 export interface RagTimeInfrastructureStackProps extends cdk.StackProps {
   environment: string;
@@ -16,6 +17,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
   public readonly vpc: ec2.Vpc;
   public readonly documentsBucket: s3.Bucket;
   public readonly documentsTable: dynamodb.Table;
+  public readonly storageStack: RagTimeStorageStack;
   public readonly computeStack: RagTimeComputeStack;
   public readonly monitoringStack: RagTimeMonitoringStack;
 
@@ -51,58 +53,14 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       enableDnsSupport: true,
     });
 
-    // S3 Bucket for document storage
-    this.documentsBucket = new s3.Bucket(this, 'DocumentsBucket', {
-      bucketName: `ragtime-documents-${environment}-${cdk.Aws.ACCOUNT_ID}-${cdk.Aws.REGION}`,
-      encryption: s3.BucketEncryption.KMS,
-      encryptionKey: toolkitStack.encryptionKey,
-      versioned: true,
-      publicReadAccess: false,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      lifecycleRules: [
-        {
-          id: 'DocumentLifecycle',
-          enabled: true,
-          transitions: [
-            {
-              storageClass: s3.StorageClass.GLACIER_INSTANT_RETRIEVAL,
-              transitionAfter: cdk.Duration.days(30),
-            },
-            {
-              storageClass: s3.StorageClass.GLACIER,
-              transitionAfter: cdk.Duration.days(120),
-            },
-          ],
-        },
-      ],
-      removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+    // Nested Stack: Storage (S3 + DynamoDB)
+    this.storageStack = new RagTimeStorageStack(this, 'StorageStack', {
+      environment,
     });
-
-    // DynamoDB Table for document metadata
-    this.documentsTable = new dynamodb.Table(this, 'DocumentsTable', {
-      tableName: `ragtime-documents-${environment}`,
-      partitionKey: { name: 'tenant_id', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'asset_id', type: dynamodb.AttributeType.STRING },
-      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
-      encryptionKey: toolkitStack.encryptionKey,
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      pointInTimeRecovery: true,
-      removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-    });
-
-    // GSI for time-based queries
-    this.documentsTable.addGlobalSecondaryIndex({
-      indexName: 'GSI1-TimeBasedQueries',
-      partitionKey: { name: 'tenant_id', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'gsi1_sk', type: dynamodb.AttributeType.STRING }, // created_at#asset_id
-    });
-
-    // GSI for status-based queries
-    this.documentsTable.addGlobalSecondaryIndex({
-      indexName: 'GSI2-StatusBasedQueries',
-      partitionKey: { name: 'gsi2_pk', type: dynamodb.AttributeType.STRING }, // tenant_id#status
-      sortKey: { name: 'gsi2_sk', type: dynamodb.AttributeType.STRING }, // created_at#asset_id
-    });
+    
+    // Reference storage resources for backward compatibility
+    this.documentsBucket = this.storageStack.documentsBucket;
+    this.documentsTable = this.storageStack.documentsTable;
 
     // VPC Endpoints for AWS services (for better security and performance)
     this.vpc.addGatewayEndpoint('S3Endpoint', {
@@ -138,35 +96,30 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       apiGatewayUrl: this.computeStack.api.url,
     });
 
-    // Outputs
+    // Outputs (no exports to avoid circular dependencies with toolkit stack)
     new cdk.CfnOutput(this, 'VPCId', {
       value: this.vpc.vpcId,
       description: 'ID of the VPC',
-      exportName: `RagTimeVPCId-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'DocumentsBucketName', {
       value: this.documentsBucket.bucketName,
       description: 'Name of the documents bucket',
-      exportName: `RagTimeDocumentsBucket-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'DocumentsTableName', {
       value: this.documentsTable.tableName,
       description: 'Name of the documents table',
-      exportName: `RagTimeDocumentsTable-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'ApiGatewayUrl', {
       value: this.computeStack.api.url,
       description: 'URL of the API Gateway',
-      exportName: `RagTimeApiUrl-${environment}`,
     });
 
     new cdk.CfnOutput(this, 'HealthCheckEndpoint', {
       value: `${this.computeStack.api.url}health`,
       description: 'Health check endpoint URL',
-      exportName: `RagTimeHealthCheckUrl-${environment}`,
     });
   }
 }
