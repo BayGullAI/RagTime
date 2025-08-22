@@ -132,7 +132,7 @@ phases:
         LATEST_GIST_ID=$(gh gist list --limit 1 | grep "OpenAI API Key" | awk '{print $1}')
         if [ -n "$LATEST_GIST_ID" ]; then
           echo "Found OpenAI API key gist: $LATEST_GIST_ID"
-          OPENAI_API_KEY=$(gh gist view $LATEST_GIST_ID --raw | grep -v "OpenAI API Key" | grep -v "^$" | tr -d '\n\r ')
+          OPENAI_API_KEY=$(gh gist view $LATEST_GIST_ID --raw | tail -n 1 | tr -d '[:space:]')
           echo "Debug: API key length: ${#OPENAI_API_KEY}"
           echo "Debug: API key starts with: ${OPENAI_API_KEY:0:10}..."
           if [ -n "$OPENAI_API_KEY" ] && [[ "$OPENAI_API_KEY" == sk-* ]]; then
