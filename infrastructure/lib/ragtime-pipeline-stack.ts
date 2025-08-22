@@ -131,7 +131,7 @@ export class RagTimePipelineStack extends cdk.Stack {
 
     this.codeBuildProject = new codebuild.Project(this, 'RagTimeCodeBuildProject', {
       projectName: 'ragtime-pipeline',
-      description: 'RagTime CI/CD pipeline for all environments',
+      description: 'RagTime CI/CD pipeline for all environments with PR support',
       source: codebuild.Source.gitHub(sourceProps),
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
@@ -173,29 +173,25 @@ export class RagTimePipelineStack extends cdk.Stack {
       buildSpec: codebuild.BuildSpec.fromSourceFilename('buildspec.yml'),
     });
 
-    // Outputs
+    // Outputs (no exports to avoid circular dependencies with toolkit stack)
     new cdk.CfnOutput(this, 'CodeBuildProjectName', {
       value: this.codeBuildProject.projectName,
       description: 'Name of the CodeBuild project',
-      exportName: 'RagTimeCodeBuildProject',
     });
 
     new cdk.CfnOutput(this, 'CodeBuildProjectArn', {
       value: this.codeBuildProject.projectArn,
       description: 'ARN of the CodeBuild project',
-      exportName: 'RagTimeCodeBuildProjectArn',
     });
 
     new cdk.CfnOutput(this, 'CodeBuildRoleArn', {
       value: this.codeBuildRole.roleArn,
       description: 'ARN of the CodeBuild service role',
-      exportName: 'RagTimeCodeBuildRoleArn',
     });
 
     new cdk.CfnOutput(this, 'LogGroupName', {
       value: logGroup.logGroupName,
       description: 'Name of the CloudWatch log group for builds',
-      exportName: 'RagTimeBuildLogGroup',
     });
   }
 }

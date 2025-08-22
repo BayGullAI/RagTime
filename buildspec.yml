@@ -115,9 +115,43 @@ phases:
       - aws configure set default.region $AWS_DEFAULT_REGION
       - aws configure set default.output json
       
-      # Bootstrap CDK with explicit account and region
-      - echo "Bootstrapping CDK if needed..."
-      - cdk bootstrap aws://$CDK_DEFAULT_ACCOUNT/$AWS_DEFAULT_REGION --require-approval never
+      # Bootstrap CDK with conflict resolution
+      - echo "Validating CDK bootstrap environment..."
+      - |
+        # Check if custom RagTimeCDKToolkit exists and is healthy
+        CUSTOM_STACK_STATUS=$(aws cloudformation describe-stacks --stack-name RagTimeCDKToolkit --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+        echo "RagTimeCDKToolkit status: $CUSTOM_STACK_STATUS"
+        
+        # Check default CDKToolkit status
+        DEFAULT_STACK_STATUS=$(aws cloudformation describe-stacks --stack-name CDKToolkit --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+        echo "CDKToolkit status: $DEFAULT_STACK_STATUS"
+        
+        # Decision logic for bootstrap approach
+        if [ "$CUSTOM_STACK_STATUS" = "CREATE_COMPLETE" ] || [ "$CUSTOM_STACK_STATUS" = "UPDATE_COMPLETE" ]; then
+          echo "✅ Custom RagTimeCDKToolkit is healthy - using custom bootstrap resources"
+          
+          # Validate that custom toolkit provides necessary bootstrap resources
+          ASSETS_BUCKET=$(aws cloudformation describe-stacks --stack-name RagTimeCDKToolkit --query 'Stacks[0].Outputs[?OutputKey==`AssetsBucketName`].OutputValue' --output text 2>/dev/null || echo "")
+          if [ -z "$ASSETS_BUCKET" ]; then
+            echo "⚠️  Custom toolkit missing assets bucket, proceeding with caution"
+          else
+            echo "✅ Assets bucket found: $ASSETS_BUCKET"
+          fi
+          
+        elif [[ "$DEFAULT_STACK_STATUS" == *"FAILED"* ]]; then
+          echo "❌ Default CDKToolkit in failed state: $DEFAULT_STACK_STATUS"
+          echo "This requires manual intervention. Cannot proceed with bootstrap."
+          echo "Please resolve CDKToolkit stack issues or ensure RagTimeCDKToolkit provides complete bootstrap functionality."
+          exit 1
+          
+        elif [ "$DEFAULT_STACK_STATUS" = "DOES_NOT_EXIST" ]; then
+          echo "📦 No default CDKToolkit found, attempting bootstrap..."
+          cdk bootstrap aws://$CDK_DEFAULT_ACCOUNT/$AWS_DEFAULT_REGION --require-approval never
+          
+        else
+          echo "✅ Default CDKToolkit exists with status: $DEFAULT_STACK_STATUS"
+          echo "Using existing CDKToolkit for bootstrap resources"
+        fi
       
       # Deploy CDK stack if app exists
       - |
