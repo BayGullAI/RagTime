@@ -42,9 +42,9 @@ phases:
         if [ -f "package.json" ]; then
           echo "Installing Node.js dependencies..."
           if [ -f "package-lock.json" ]; then
-            npm ci --ignore-scripts
+            npm ci
           else
-            npm install --ignore-scripts
+            npm install
           fi
         fi
       
