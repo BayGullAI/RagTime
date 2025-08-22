@@ -7,6 +7,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as rds from 'aws-cdk-lib/aws-rds';
 import { Construct } from 'constructs';
 
 export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
@@ -15,6 +16,8 @@ export interface RagTimeComputeStackProps extends cdk.NestedStackProps {
   documentsBucket: s3.Bucket;
   documentsTable: dynamodb.Table;
   openAISecret: secretsmanager.Secret;
+  databaseCluster: rds.DatabaseCluster;
+  databaseSecret: secretsmanager.Secret;
 }
 
 export class RagTimeComputeStack extends cdk.NestedStack {
@@ -24,7 +27,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc, documentsBucket, documentsTable, openAISecret } = props;
+    const { environment, vpc, documentsBucket, documentsTable, openAISecret, databaseCluster, databaseSecret } = props;
 
     // Security Groups
     const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
@@ -59,6 +62,19 @@ export class RagTimeComputeStack extends cdk.NestedStack {
     documentsBucket.grantReadWrite(lambdaExecutionRole);
     documentsTable.grantReadWriteData(lambdaExecutionRole);
     openAISecret.grantRead(lambdaExecutionRole);
+    databaseSecret.grantRead(lambdaExecutionRole);
+    
+    // Grant Lambda access to Aurora cluster
+    lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AuroraConnectPermissions',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'rds-db:connect',
+      ],
+      resources: [
+        `arn:aws:rds-db:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:dbuser:${databaseCluster.clusterIdentifier}/ragtime_admin`,
+      ],
+    }));
     
     // Note: KMS permissions for encryption key are granted automatically through
     // the bucket and secret grants above, avoiding circular dependency
@@ -109,6 +125,9 @@ export class RagTimeComputeStack extends cdk.NestedStack {
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
         OPENAI_SECRET_NAME: openAISecret.secretName,
+        DATABASE_SECRET_NAME: databaseSecret.secretName,
+        DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
+        DATABASE_NAME: 'ragtime',
       },
     });
 

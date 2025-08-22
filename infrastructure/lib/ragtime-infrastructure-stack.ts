@@ -96,6 +96,8 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       documentsBucket: this.documentsBucket,
       documentsTable: this.documentsTable,
       openAISecret: this.coreStack.openAISecret,
+      databaseCluster: this.coreStack.databaseCluster,
+      databaseSecret: this.coreStack.databaseSecret,
     });
 
     // Nested Stack: Monitoring (CloudWatch Canaries)
