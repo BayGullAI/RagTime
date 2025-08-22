@@ -12,9 +12,14 @@ phases:
       - echo "Installing dependencies..."
       - echo "Installing CDK globally..."
       - npm install -g aws-cdk@latest
+      - echo "Installing GitHub CLI..."
+      - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+      - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+      - apt update && apt install -y gh
       - echo "Node.js version:" && node --version
       - echo "NPM version:" && npm --version
       - echo "CDK version:" && cdk --version
+      - echo "GitHub CLI version:" && gh --version
       - echo "Setting CDK environment variables..."
       - export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
       - export CDK_DEFAULT_REGION=$AWS_REGION
@@ -114,6 +119,33 @@ phases:
       # Configure AWS CLI for consistent credential access
       - aws configure set default.region $AWS_DEFAULT_REGION
       - aws configure set default.output json
+      
+      # Fetch OpenAI API key from latest gist
+      - echo "Fetching OpenAI API key from latest gist..."
+      - |
+        # Authenticate with GitHub using token from SSM Parameter Store
+        GITHUB_TOKEN=$(aws ssm get-parameter --name /ragtime/github-token --with-decryption --query 'Parameter.Value' --output text)
+        export GH_TOKEN="$GITHUB_TOKEN"
+        echo "✅ GitHub CLI authenticated"
+        
+        # Get the latest gist containing OpenAI API Key
+        LATEST_GIST_ID=$(gh gist list --limit 1 | grep "OpenAI API Key" | awk '{print $1}')
+        if [ -n "$LATEST_GIST_ID" ]; then
+          echo "Found OpenAI API key gist: $LATEST_GIST_ID"
+          OPENAI_API_KEY=$(gh gist view $LATEST_GIST_ID --raw | grep -v "OpenAI API Key" | tr -d '\n\r ')
+          if [ -n "$OPENAI_API_KEY" ] && [[ "$OPENAI_API_KEY" == sk-* ]]; then
+            export OPENAI_API_KEY="$OPENAI_API_KEY"
+            echo "✅ OpenAI API key successfully retrieved and set"
+            # Mask the key in logs for security
+            echo "API key starts with: ${OPENAI_API_KEY:0:10}..."
+          else
+            echo "⚠️  Could not extract valid OpenAI API key from gist"
+            unset OPENAI_API_KEY
+          fi
+        else
+          echo "⚠️  No OpenAI API key gist found, secret will be created with placeholder"
+          unset OPENAI_API_KEY
+        fi
       
       # Bootstrap CDK with conflict resolution
       - echo "Validating CDK bootstrap environment..."

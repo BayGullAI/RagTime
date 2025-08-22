@@ -25,16 +25,32 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     this.isOpenSearchEnabled = enableOpenSearch;
 
     // OpenAI API Key Secret
-    this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
-      secretName: `ragtime-openai-api-key-${environment}`,
-      description: 'OpenAI API key for embedding generation',
-      generateSecretString: {
-        secretStringTemplate: JSON.stringify({ api_key: '' }),
-        generateStringKey: 'api_key',
-        excludeCharacters: '"@/\\\'',
-      },
-      // Use default AWS managed encryption to avoid cross-stack dependencies
-    });
+    // Check if OpenAI API key is provided via environment variable
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    
+    if (openaiApiKey) {
+      // If API key is provided, create secret with the actual key
+      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
+        secretName: `ragtime-openai-api-key-${environment}`,
+        description: 'OpenAI API key for embedding generation',
+        secretObjectValue: {
+          api_key: cdk.SecretValue.unsafePlainText(openaiApiKey),
+        },
+        // Use default AWS managed encryption to avoid cross-stack dependencies
+      });
+    } else {
+      // If no API key provided, create secret with placeholder for manual setup
+      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
+        secretName: `ragtime-openai-api-key-${environment}`,
+        description: 'OpenAI API key for embedding generation (set manually)',
+        generateSecretString: {
+          secretStringTemplate: JSON.stringify({ api_key: 'REPLACE_WITH_ACTUAL_OPENAI_API_KEY' }),
+          generateStringKey: 'api_key',
+          excludeCharacters: '"@/\\\'',
+        },
+        // Use default AWS managed encryption to avoid cross-stack dependencies
+      });
+    }
 
     // Security group for OpenSearch domain
     const openSearchSecurityGroup = new ec2.SecurityGroup(this, 'OpenSearchSecurityGroup', {
