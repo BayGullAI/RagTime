@@ -66,71 +66,64 @@ export class RagTimeMonitoringStack extends cdk.NestedStack {
       schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
       test: synthetics.Test.custom({
         code: synthetics.Code.fromInline(`
-const synthetics = require('Synthetics');
-const log = require('SyntheticsLogger');
-const https = require('https');
+import json
+import time
+import urllib3
+from aws_synthetics.selenium import synthetics_logger as logger
+from aws_synthetics.common import synthetics_logger
 
-const healthCheckBlueprint = async function () {
-    const healthUrl = '${apiGatewayUrl}health';
+def main():
+    # Health check endpoint URL
+    health_url = "${apiGatewayUrl}health"
     
-    return new Promise((resolve, reject) => {
-        const startTime = Date.now();
+    # Create HTTP pool manager
+    http = urllib3.PoolManager()
+    
+    # Record start time
+    start_time = time.time()
+    
+    try:
+        # Make HTTP GET request
+        response = http.request('GET', health_url, timeout=30)
+        response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
         
-        https.get(healthUrl, (res) => {
-            let responseBody = '';
-            
-            res.on('data', (chunk) => {
-                responseBody += chunk;
-            });
-            
-            res.on('end', () => {
-                const responseTime = Date.now() - startTime;
-                
-                try {
-                    // Verify response status
-                    if (res.statusCode !== 200) {
-                        throw new Error(\`Health check failed with status: \${res.statusCode}\`);
-                    }
-                    
-                    // Parse and validate JSON response
-                    const healthData = JSON.parse(responseBody);
-                    
-                    if (healthData.status !== 'healthy') {
-                        throw new Error(\`Health check status is not healthy: \${healthData.status}\`);
-                    }
-                    
-                    if (!healthData.timestamp) {
-                        throw new Error('Health check response missing timestamp');
-                    }
-                    
-                    if (!healthData.services) {
-                        throw new Error('Health check response missing services status');
-                    }
-                    
-                    // Verify response time is under 5 seconds
-                    if (responseTime > 5000) {
-                        throw new Error(\`Health check response time too slow: \${responseTime}ms\`);
-                    }
-                    
-                    log.info(\`Health check passed - Status: \${healthData.status}, Response time: \${responseTime}ms\`);
-                    resolve();
-                } catch (error) {
-                    reject(error);
-                }
-            });
-        }).on('error', (error) => {
-            reject(error);
-        });
-    });
-};
+        # Verify response status
+        if response.status != 200:
+            raise Exception(f"Health check failed with status: {response.status}")
+        
+        # Parse and validate JSON response
+        try:
+            health_data = json.loads(response.data.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            raise Exception(f"Health check response is not valid JSON: {e}")
+        
+        # Validate required fields
+        if health_data.get('status') != 'healthy':
+            raise Exception(f"Health check status is not healthy: {health_data.get('status')}")
+        
+        if not health_data.get('timestamp'):
+            raise Exception('Health check response missing timestamp')
+        
+        if not health_data.get('services'):
+            raise Exception('Health check response missing services status')
+        
+        # Verify response time is under 5 seconds
+        if response_time > 5000:
+            raise Exception(f"Health check response time too slow: {response_time}ms")
+        
+        logger.info(f"Health check passed - Status: {health_data['status']}, Response time: {response_time:.0f}ms")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        raise
 
-exports.handler = async () => {
-    return await synthetics.executeStep('healthCheckCanary', healthCheckBlueprint);
-};
+def handler(event, context):
+    return main()
         `),
         handler: 'index.handler',
       }),
-      runtime: synthetics.Runtime.SYNTHETICS_NODEJS_PUPPETEER_3_9,
+      runtime: synthetics.Runtime.SYNTHETICS_PYTHON_SELENIUM_1_3,
       environmentVariables: {
         API_URL: apiGatewayUrl,
       },
@@ -147,124 +140,101 @@ exports.handler = async () => {
       schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
       test: synthetics.Test.custom({
         code: synthetics.Code.fromInline(`
-const synthetics = require('Synthetics');
-const log = require('SyntheticsLogger');
-const https = require('https');
-const { URL } = require('url');
+import json
+import urllib3
+from aws_synthetics.selenium import synthetics_logger as logger
+from aws_synthetics.common import synthetics_logger
 
-const corsTestBlueprint = async function () {
-    const healthUrl = '${apiGatewayUrl}health';
-    const parsedUrl = new URL(healthUrl);
+def main():
+    # Health check endpoint URL for CORS testing
+    health_url = "${apiGatewayUrl}health"
     
-    // Test 1: Preflight OPTIONS request
-    const preflightTest = () => {
-        return new Promise((resolve, reject) => {
-            const options = {
-                hostname: parsedUrl.hostname,
-                port: 443,
-                path: parsedUrl.pathname,
-                method: 'OPTIONS',
-                headers: {
-                    'Origin': 'https://example.com',
-                    'Access-Control-Request-Method': 'GET',
-                    'Access-Control-Request-Headers': 'Content-Type'
-                }
-            };
+    # Create HTTP pool manager
+    http = urllib3.PoolManager()
+    
+    try:
+        # Test 1: Preflight OPTIONS request
+        logger.info("Testing CORS preflight request...")
+        
+        preflight_headers = {
+            'Origin': 'https://example.com',
+            'Access-Control-Request-Method': 'GET',
+            'Access-Control-Request-Headers': 'Content-Type'
+        }
+        
+        preflight_response = http.request('OPTIONS', health_url, headers=preflight_headers, timeout=30)
+        
+        if preflight_response.status != 200:
+            raise Exception(f"CORS preflight failed with status: {preflight_response.status}")
+        
+        # Verify required CORS headers in preflight response
+        required_cors_headers = [
+            'access-control-allow-origin',
+            'access-control-allow-methods',
+            'access-control-allow-headers'
+        ]
+        
+        response_headers = {k.lower(): v for k, v in preflight_response.headers.items()}
+        
+        for header in required_cors_headers:
+            if header not in response_headers:
+                raise Exception(f"Missing CORS header in preflight response: {header}")
+        
+        logger.info("CORS preflight test passed")
+        
+        # Test 2: Actual CORS request
+        logger.info("Testing actual CORS request...")
+        
+        cors_headers = {
+            'Origin': 'https://example.com',
+            'Content-Type': 'application/json'
+        }
+        
+        cors_response = http.request('GET', health_url, headers=cors_headers, timeout=30)
+        
+        if cors_response.status != 200:
+            raise Exception(f"CORS request failed with status: {cors_response.status}")
+        
+        # Verify CORS headers in actual response
+        response_headers = {k.lower(): v for k, v in cors_response.headers.items()}
+        
+        if 'access-control-allow-origin' not in response_headers:
+            raise Exception('Response missing Access-Control-Allow-Origin header')
+        
+        # Verify response body
+        try:
+            response_data = json.loads(cors_response.data.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            raise Exception(f"CORS response body is not valid JSON: {e}")
+        
+        if response_data.get('status') != 'healthy':
+            raise Exception(f"CORS request returned unhealthy status: {response_data.get('status')}")
+        
+        logger.info("CORS functionality test passed")
+        
+        # Test 3: Verify allowed methods
+        logger.info("Testing CORS allowed methods...")
+        
+        allowed_methods = response_headers.get('access-control-allow-methods', '')
+        expected_methods = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+        
+        for method in expected_methods:
+            if method not in allowed_methods.upper():
+                logger.warning(f"Method {method} not found in allowed methods: {allowed_methods}")
+        
+        logger.info("All CORS tests completed successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"CORS test failed: {str(e)}")
+        raise
 
-            const req = https.request(options, (res) => {
-                if (res.statusCode !== 200) {
-                    reject(new Error(\`CORS preflight failed with status: \${res.statusCode}\`));
-                    return;
-                }
-
-                const corsHeaders = res.headers;
-                const requiredCorsHeaders = [
-                    'access-control-allow-origin',
-                    'access-control-allow-methods', 
-                    'access-control-allow-headers'
-                ];
-
-                for (const header of requiredCorsHeaders) {
-                    if (!corsHeaders[header]) {
-                        reject(new Error(\`Missing CORS header: \${header}\`));
-                        return;
-                    }
-                }
-
-                log.info('CORS preflight test passed');
-                resolve();
-            });
-
-            req.on('error', reject);
-            req.end();
-        });
-    };
-
-    // Test 2: Actual CORS request
-    const corsRequestTest = () => {
-        return new Promise((resolve, reject) => {
-            const options = {
-                hostname: parsedUrl.hostname,
-                port: 443,
-                path: parsedUrl.pathname,
-                method: 'GET',
-                headers: {
-                    'Origin': 'https://example.com',
-                    'Content-Type': 'application/json'
-                }
-            };
-
-            const req = https.request(options, (res) => {
-                if (res.statusCode !== 200) {
-                    reject(new Error(\`CORS request failed with status: \${res.statusCode}\`));
-                    return;
-                }
-
-                // Verify CORS headers in response
-                if (!res.headers['access-control-allow-origin']) {
-                    reject(new Error('Response missing Access-Control-Allow-Origin header'));
-                    return;
-                }
-
-                let responseBody = '';
-                res.on('data', (chunk) => {
-                    responseBody += chunk;
-                });
-
-                res.on('end', () => {
-                    try {
-                        const responseData = JSON.parse(responseBody);
-                        
-                        if (responseData.status !== 'healthy') {
-                            reject(new Error(\`CORS request returned unhealthy status: \${responseData.status}\`));
-                            return;
-                        }
-
-                        log.info('CORS functionality test passed');
-                        resolve();
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            });
-
-            req.on('error', reject);
-            req.end();
-        });
-    };
-
-    // Execute tests sequentially
-    await preflightTest();
-    await corsRequestTest();
-};
-
-exports.handler = async () => {
-    return await synthetics.executeStep('corsTestCanary', corsTestBlueprint);
-};
+def handler(event, context):
+    return main()
         `),
         handler: 'index.handler',
       }),
-      runtime: synthetics.Runtime.SYNTHETICS_NODEJS_PUPPETEER_3_9,
+      runtime: synthetics.Runtime.SYNTHETICS_PYTHON_SELENIUM_1_3,
       environmentVariables: {
         API_URL: apiGatewayUrl,
       },
