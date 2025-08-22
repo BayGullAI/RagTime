@@ -91,7 +91,7 @@ phases:
         EOFFUNC
         
         # Source functions and initialize
-        source /tmp/github_functions.sh
+        . /tmp/github_functions.sh
         get_github_info
         
         # Post initial status
@@ -114,7 +114,7 @@ phases:
       
       # Report install phase success
       - |
-        source /tmp/github_functions.sh
+        . /tmp/github_functions.sh
         get_github_info
         LOGS_URL=$(get_logs_url)
         post_github_status "success" "ci/ragtime/install" "✅ Dependencies installed successfully" "$LOGS_URL" || true
@@ -123,7 +123,7 @@ phases:
     commands:
       # Start pre-build phase reporting
       - |
-        source /tmp/github_functions.sh
+        . /tmp/github_functions.sh
         get_github_info
         LOGS_URL=$(get_logs_url)
         post_github_status "pending" "ci/ragtime/pre-build" "🔍 Running validations and tests..." "$LOGS_URL"
@@ -156,7 +156,7 @@ phases:
       
       # Run linting if configured
       - |
-        source /tmp/github_functions.sh
+        . /tmp/github_functions.sh
         get_github_info
         LOGS_URL=$(get_logs_url)
         post_github_status "pending" "ci/ragtime/lint" "🔍 Running code quality checks..." "$LOGS_URL"
@@ -176,7 +176,7 @@ phases:
       
       # Run tests if configured  
       - |
-        source /tmp/github_functions.sh
+        . /tmp/github_functions.sh
         get_github_info
         LOGS_URL=$(get_logs_url)
         post_github_status "pending" "ci/ragtime/test" "🧪 Running test suite..." "$LOGS_URL"
@@ -369,7 +369,7 @@ phases:
       
       # Post final success status
       - |
-        source /tmp/github_functions.sh
+        . /tmp/github_functions.sh
         get_github_info
         LOGS_URL=$(get_logs_url)
         post_github_status "success" "ci/ragtime/deploy" "✅ Deployment completed successfully" "$LOGS_URL"
