@@ -1,1 +1,6 @@
 .plan/
+node_modules/
+dist/
+cdk.out/
+cdk.context.json
+package-lock.json

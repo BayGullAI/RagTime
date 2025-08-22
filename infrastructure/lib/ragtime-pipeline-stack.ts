@@ -8,6 +8,7 @@ import { RagTimeCDKToolkitStack } from './ragtime-toolkit-stack';
 export interface RagTimePipelineStackProps extends cdk.StackProps {
   environment: string;
   toolkitStack: RagTimeCDKToolkitStack;
+  githubToken?: string;
 }
 
 export class RagTimePipelineStack extends cdk.Stack {
@@ -17,19 +18,19 @@ export class RagTimePipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: RagTimePipelineStackProps) {
     super(scope, id, props);
 
-    const { environment, toolkitStack } = props;
+    const { environment, toolkitStack, githubToken } = props;
 
     // CloudWatch Log Group for CodeBuild
     const logGroup = new logs.LogGroup(this, 'RagTimeBuildLogs', {
-      logGroupName: `/aws/codebuild/ragtime-${environment}`,
+      logGroupName: '/aws/codebuild/ragtime-pipeline',
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
     // CodeBuild Service Role
     this.codeBuildRole = new iam.Role(this, 'RagTimeCodeBuildRole', {
-      roleName: `RagTimeCodeBuildRole-${environment}`,
-      description: `CodeBuild service role for RagTime ${environment} environment`,
+      roleName: 'RagTimeCodeBuildRole',
+      description: 'CodeBuild service role for RagTime pipeline',
       assumedBy: new iam.ServicePrincipal('codebuild.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('PowerUserAccess'),
@@ -95,18 +96,25 @@ export class RagTimePipelineStack extends cdk.Stack {
     toolkitStack.encryptionKey.grantEncryptDecrypt(this.codeBuildRole);
 
     // CodeBuild Project
+    const sourceProps: any = {
+      owner: 'BayGullAI',
+      repo: 'RagTime',
+      webhook: true,
+      webhookFilters: [
+        codebuild.FilterGroup.inEventOf(codebuild.EventAction.PUSH).andBranchIs('main'),
+        codebuild.FilterGroup.inEventOf(codebuild.EventAction.PULL_REQUEST_UPDATED),
+      ],
+    };
+
+    // Add GitHub token if provided
+    if (githubToken) {
+      sourceProps.accessToken = cdk.SecretValue.unsafePlainText(githubToken);
+    }
+
     this.codeBuildProject = new codebuild.Project(this, 'RagTimeCodeBuildProject', {
-      projectName: `ragtime-${environment}`,
-      description: `RagTime CI/CD pipeline for ${environment} environment`,
-      source: codebuild.Source.gitHub({
-        owner: 'BayGullAI',
-        repo: 'RagTime',
-        webhook: true,
-        webhookFilters: [
-          codebuild.FilterGroup.inEventOf(codebuild.EventAction.PUSH).andBranchIs('main'),
-          codebuild.FilterGroup.inEventOf(codebuild.EventAction.PULL_REQUEST_UPDATED),
-        ],
-      }),
+      projectName: 'ragtime-pipeline',
+      description: 'RagTime CI/CD pipeline for all environments',
+      source: codebuild.Source.gitHub(sourceProps),
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
         computeType: codebuild.ComputeType.MEDIUM,
@@ -151,25 +159,25 @@ export class RagTimePipelineStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CodeBuildProjectName', {
       value: this.codeBuildProject.projectName,
       description: 'Name of the CodeBuild project',
-      exportName: `RagTimeCodeBuildProject-${environment}`,
+      exportName: 'RagTimeCodeBuildProject',
     });
 
     new cdk.CfnOutput(this, 'CodeBuildProjectArn', {
       value: this.codeBuildProject.projectArn,
       description: 'ARN of the CodeBuild project',
-      exportName: `RagTimeCodeBuildProjectArn-${environment}`,
+      exportName: 'RagTimeCodeBuildProjectArn',
     });
 
     new cdk.CfnOutput(this, 'CodeBuildRoleArn', {
       value: this.codeBuildRole.roleArn,
       description: 'ARN of the CodeBuild service role',
-      exportName: `RagTimeCodeBuildRoleArn-${environment}`,
+      exportName: 'RagTimeCodeBuildRoleArn',
     });
 
     new cdk.CfnOutput(this, 'LogGroupName', {
       value: logGroup.logGroupName,
       description: 'Name of the CloudWatch log group for builds',
-      exportName: `RagTimeBuildLogGroup-${environment}`,
+      exportName: 'RagTimeBuildLogGroup',
     });
   }
 }

@@ -22,11 +22,13 @@ const toolkitStack = new RagTimeCDKToolkitStack(app, 'RagTimeCDKToolkit', {
 });
 
 // Stack 2: CI/CD Pipeline 
-const pipelineStack = new RagTimePipelineStack(app, `RagTimePipeline-${environment}`, {
+const githubToken = app.node.tryGetContext('githubToken') || process.env.GITHUB_TOKEN;
+const pipelineStack = new RagTimePipelineStack(app, 'RagTimePipeline', {
   env,
-  description: `RagTime CI/CD Pipeline - CodeBuild pipeline for ${environment} environment`,
+  description: 'RagTime CI/CD Pipeline - CodeBuild pipeline for all environments',
   environment,
   toolkitStack,
+  githubToken,
 });
 
 // Stack 3: Core Infrastructure
