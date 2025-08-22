@@ -120,32 +120,8 @@ phases:
       - aws configure set default.region $AWS_DEFAULT_REGION
       - aws configure set default.output json
       
-      # Fetch OpenAI API key from latest gist
-      - echo "Fetching OpenAI API key from latest gist..."
-      - |
-        # Authenticate with GitHub using token from SSM Parameter Store
-        GITHUB_TOKEN=$(aws ssm get-parameter --name /ragtime/github-token --with-decryption --query 'Parameter.Value' --output text)
-        export GH_TOKEN="$GITHUB_TOKEN"
-        echo "✅ GitHub CLI authenticated"
-        
-        # Get the latest gist containing OpenAI API Key
-        LATEST_GIST_ID=$(gh gist list --limit 1 | grep "OpenAI API Key" | awk '{print $1}')
-        if [ -n "$LATEST_GIST_ID" ]; then
-          echo "Found OpenAI API key gist: $LATEST_GIST_ID"
-          OPENAI_API_KEY=$(gh gist view $LATEST_GIST_ID --raw | tail -n 1 | xargs echo -n)
-          if [ -n "$OPENAI_API_KEY" ] && [[ "$OPENAI_API_KEY" == sk-* ]]; then
-            export OPENAI_API_KEY="$OPENAI_API_KEY"
-            echo "✅ OpenAI API key successfully retrieved and set"
-            # Mask the key in logs for security
-            echo "API key starts with: ${OPENAI_API_KEY:0:10}..."
-          else
-            echo "⚠️  Could not extract valid OpenAI API key from gist"
-            unset OPENAI_API_KEY
-          fi
-        else
-          echo "⚠️  No OpenAI API key gist found, secret will be created with placeholder"
-          unset OPENAI_API_KEY
-        fi
+      # Note: OPENAI_API_KEY should be set as environment variable in CodeBuild project
+      # Use: aws codebuild update-project --name ragtime-pipeline --environment '{"environmentVariables":[...existing vars..., {"name":"OPENAI_API_KEY","value":"your-key-here"}]}'
       
       # Bootstrap CDK with conflict resolution
       - echo "Validating CDK bootstrap environment..."
