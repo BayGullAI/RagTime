@@ -66,36 +66,41 @@ export class RagTimeMonitoringStack extends cdk.NestedStack {
       schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
       test: synthetics.Test.custom({
         code: synthetics.Code.fromInline(`
-import json
-import time
-import urllib3
 from aws_synthetics.selenium import synthetics_logger as logger
-from aws_synthetics.common import synthetics_logger
+from aws_synthetics.common import synthetics_configuration
+import time
+import json
 
 def main():
-    # Health check endpoint URL
+    # Configure synthetics
+    synthetics_configuration.set_config({
+        "screenshot_on_step_start": False,
+        "screenshot_on_step_success": False,
+        "screenshot_on_step_failure": True
+    })
+    
     health_url = "${apiGatewayUrl}health"
-    
-    # Create HTTP pool manager
-    http = urllib3.PoolManager()
-    
-    # Record start time
-    start_time = time.time()
+    logger.info(f"Starting health check for: {health_url}")
     
     try:
+        # Import requests inside the function to ensure it's available
+        import requests
+        
+        start_time = time.time()
+        
         # Make HTTP GET request
-        response = http.request('GET', health_url, timeout=30)
-        response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+        response = requests.get(health_url, timeout=30)
+        response_time = (time.time() - start_time) * 1000
         
         # Verify response status
-        if response.status != 200:
-            raise Exception(f"Health check failed with status: {response.status}")
+        if response.status_code != 200:
+            raise Exception(f"Health check failed with status: {response.status_code}")
         
-        # Parse and validate JSON response
+        # Parse JSON response
         try:
-            health_data = json.loads(response.data.decode('utf-8'))
-        except json.JSONDecodeError as e:
-            raise Exception(f"Health check response is not valid JSON: {e}")
+            health_data = response.json()
+        except ValueError as e:
+            raise Exception(f"Health check response is not valid JSON: {str(e)}")
         
         # Validate required fields
         if health_data.get('status') != 'healthy':
@@ -107,16 +112,16 @@ def main():
         if not health_data.get('services'):
             raise Exception('Health check response missing services status')
         
-        # Verify response time is under 5 seconds
+        # Verify response time
         if response_time > 5000:
-            raise Exception(f"Health check response time too slow: {response_time}ms")
+            raise Exception(f"Health check response time too slow: {response_time:.0f}ms")
         
         logger.info(f"Health check passed - Status: {health_data['status']}, Response time: {response_time:.0f}ms")
-        return True
+        return {"statusCode": 200, "body": "Health check successful"}
         
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        raise
+        raise Exception(str(e))
 
 def handler(event, context):
     return main()
@@ -140,19 +145,25 @@ def handler(event, context):
       schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
       test: synthetics.Test.custom({
         code: synthetics.Code.fromInline(`
-import json
-import urllib3
 from aws_synthetics.selenium import synthetics_logger as logger
-from aws_synthetics.common import synthetics_logger
+from aws_synthetics.common import synthetics_configuration
+import json
 
 def main():
-    # Health check endpoint URL for CORS testing
-    health_url = "${apiGatewayUrl}health"
+    # Configure synthetics
+    synthetics_configuration.set_config({
+        "screenshot_on_step_start": False,
+        "screenshot_on_step_success": False,
+        "screenshot_on_step_failure": True
+    })
     
-    # Create HTTP pool manager
-    http = urllib3.PoolManager()
+    health_url = "${apiGatewayUrl}health"
+    logger.info(f"Starting CORS test for: {health_url}")
     
     try:
+        # Import requests inside the function
+        import requests
+        
         # Test 1: Preflight OPTIONS request
         logger.info("Testing CORS preflight request...")
         
@@ -162,12 +173,12 @@ def main():
             'Access-Control-Request-Headers': 'Content-Type'
         }
         
-        preflight_response = http.request('OPTIONS', health_url, headers=preflight_headers, timeout=30)
+        preflight_response = requests.options(health_url, headers=preflight_headers, timeout=30)
         
-        if preflight_response.status != 200:
-            raise Exception(f"CORS preflight failed with status: {preflight_response.status}")
+        if preflight_response.status_code != 200:
+            raise Exception(f"CORS preflight failed with status: {preflight_response.status_code}")
         
-        # Verify required CORS headers in preflight response
+        # Check required CORS headers in preflight response
         required_cors_headers = [
             'access-control-allow-origin',
             'access-control-allow-methods',
@@ -190,10 +201,10 @@ def main():
             'Content-Type': 'application/json'
         }
         
-        cors_response = http.request('GET', health_url, headers=cors_headers, timeout=30)
+        cors_response = requests.get(health_url, headers=cors_headers, timeout=30)
         
-        if cors_response.status != 200:
-            raise Exception(f"CORS request failed with status: {cors_response.status}")
+        if cors_response.status_code != 200:
+            raise Exception(f"CORS request failed with status: {cors_response.status_code}")
         
         # Verify CORS headers in actual response
         response_headers = {k.lower(): v for k, v in cors_response.headers.items()}
@@ -203,9 +214,9 @@ def main():
         
         # Verify response body
         try:
-            response_data = json.loads(cors_response.data.decode('utf-8'))
-        except json.JSONDecodeError as e:
-            raise Exception(f"CORS response body is not valid JSON: {e}")
+            response_data = cors_response.json()
+        except ValueError as e:
+            raise Exception(f"CORS response body is not valid JSON: {str(e)}")
         
         if response_data.get('status') != 'healthy':
             raise Exception(f"CORS request returned unhealthy status: {response_data.get('status')}")
@@ -223,11 +234,11 @@ def main():
                 logger.warning(f"Method {method} not found in allowed methods: {allowed_methods}")
         
         logger.info("All CORS tests completed successfully")
-        return True
+        return {"statusCode": 200, "body": "CORS tests successful"}
         
     except Exception as e:
         logger.error(f"CORS test failed: {str(e)}")
-        raise
+        raise Exception(str(e))
 
 def handler(event, context):
     return main()
