@@ -30,7 +30,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     
     if (openaiApiKey) {
       // If API key is provided, create secret with the actual key
-      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
+      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecretWithKey', {
         secretName: `ragtime-openai-api-key-${environment}`,
         description: 'OpenAI API key for embedding generation',
         secretObjectValue: {
@@ -40,7 +40,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       });
     } else {
       // If no API key provided, create secret with placeholder for manual setup
-      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecret', {
+      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecretPlaceholder', {
         secretName: `ragtime-openai-api-key-${environment}`,
         description: 'OpenAI API key for embedding generation (set manually)',
         generateSecretString: {
