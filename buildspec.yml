@@ -41,7 +41,11 @@ phases:
       - |
         if [ -f "package.json" ]; then
           echo "Installing Node.js dependencies..."
-          npm ci --ignore-scripts
+          if [ -f "package-lock.json" ]; then
+            npm ci --ignore-scripts
+          else
+            npm install --ignore-scripts
+          fi
         fi
       
       # Run linting if configured
