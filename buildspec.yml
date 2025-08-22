@@ -147,14 +147,14 @@ phases:
       
       # Output deployment information
       - echo "=== DEPLOYMENT SUMMARY ==="
-      - echo "Environment: Infrastructure Foundation"
-      - echo "Region:" && echo $AWS_DEFAULT_REGION
-      - echo "Build ID:" && echo $CODEBUILD_BUILD_ID
+      - echo "Environment Infrastructure Foundation"
+      - echo "Region $AWS_DEFAULT_REGION"
+      - echo "Build ID $CODEBUILD_BUILD_ID"
       - |
         if [ -f "cdk.json" ] || [ -f "infrastructure/cdk.json" ]; then
-          echo "Stack Status:" $(aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NO_STACK_YET")
+          echo "Stack Status: $(aws cloudformation describe-stacks --stack-name RagTime-Infrastructure --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NO_STACK_YET')"
         fi
-      - echo "CodeBuild pipeline deployed successfully on `date`"
+      - echo "CodeBuild pipeline deployed successfully on $(date)"
 
 artifacts:
   files:
