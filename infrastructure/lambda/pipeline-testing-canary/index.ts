@@ -492,7 +492,7 @@ async function uploadPhase(
         steps.push({
           name: `web_extraction_upload_${i + 1}`,
           status: 'PASS',
-          details: `Extracted and uploaded content from ${url}`,
+          details: `Extracted and uploaded content from ${extractionResult.url}`,
           duration: Date.now() - stepStartTime,
           metadata: {
             url: extractionResult.url,
@@ -584,7 +584,7 @@ async function monitorProcessingPhase(
       try {
         // Check for documents with pipeline correlation IDs
         const documentsResult = await dbClient.query(`
-          SELECT id, filename, correlation_id, extraction_method, word_count, created_at 
+          SELECT id, original_filename, correlation_id, extraction_method, word_count, created_at 
           FROM documents 
           WHERE correlation_id LIKE 'PIPELINE-%'
           ORDER BY created_at DESC
