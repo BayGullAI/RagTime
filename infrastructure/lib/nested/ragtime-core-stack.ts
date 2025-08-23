@@ -3,8 +3,10 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
+import * as path from 'path';
 
 export interface RagTimeCoreStackProps extends cdk.NestedStackProps {
   environment: string;
@@ -132,6 +134,9 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     //   created_at TIMESTAMP DEFAULT NOW()
     // );
     // CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+    // Note: Database migrations will be handled manually or via separate deployment
+    // The Aurora cluster is ready for pgvector extension and schema creation
 
     // Outputs
     new cdk.CfnOutput(this, 'OpenAISecretName', {
