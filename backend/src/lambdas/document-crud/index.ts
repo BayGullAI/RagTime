@@ -8,6 +8,7 @@ import {
   DeleteCommand,
   ScanCommand 
 } from '@aws-sdk/lib-dynamodb';
+import { createResponse, createErrorResponse } from '../../utils/response.utils';
 
 interface DocumentMetadata {
   tenant_id: string;
@@ -44,18 +45,6 @@ interface ListDocumentsResponse {
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
 const dynamoClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.AWS_REGION }));
 
-function createResponse(statusCode: number, body: any): APIGatewayProxyResult {
-  return {
-    statusCode,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-    },
-    body: JSON.stringify(body),
-  };
-}
 
 async function listDocuments(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
   try {
@@ -165,10 +154,11 @@ async function listDocuments(event: APIGatewayProxyEvent): Promise<APIGatewayPro
     }
   } catch (error) {
     console.error('Error listing documents:', error);
-    return createResponse(500, {
-      error: 'Internal server error',
-      message: error instanceof Error ? error.message : 'Unknown error occurred',
-    });
+    return createErrorResponse(
+      500,
+      'Internal server error',
+      error instanceof Error ? error.message : 'Unknown error occurred'
+    );
   }
 }
 
@@ -220,10 +210,11 @@ async function getDocument(event: APIGatewayProxyEvent): Promise<APIGatewayProxy
     });
   } catch (error) {
     console.error('Error getting document:', error);
-    return createResponse(500, {
-      error: 'Internal server error',
-      message: error instanceof Error ? error.message : 'Unknown error occurred',
-    });
+    return createErrorResponse(
+      500,
+      'Internal server error',
+      error instanceof Error ? error.message : 'Unknown error occurred'
+    );
   }
 }
 
@@ -332,10 +323,11 @@ async function deleteDocument(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
   } catch (error) {
     console.error('Error deleting document:', error);
-    return createResponse(500, {
-      error: 'Document deletion failed',
-      message: error instanceof Error ? error.message : 'Unknown error occurred',
-    });
+    return createErrorResponse(
+      500,
+      'Document deletion failed',
+      error instanceof Error ? error.message : 'Unknown error occurred'
+    );
   }
 }
 
@@ -374,9 +366,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
   } catch (error) {
     console.error('Document CRUD handler error:', error);
-    return createResponse(500, {
-      error: 'Internal server error',
-      message: error instanceof Error ? error.message : 'Unknown error occurred',
-    });
+    return createErrorResponse(
+      500,
+      'Internal server error',
+      error instanceof Error ? error.message : 'Unknown error occurred'
+    );
   }
 };
