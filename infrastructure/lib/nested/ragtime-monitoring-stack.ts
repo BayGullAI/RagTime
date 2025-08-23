@@ -3,6 +3,7 @@ import * as synthetics from 'aws-cdk-lib/aws-synthetics';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 
 export interface RagTimeMonitoringStackProps extends cdk.NestedStackProps {
@@ -17,6 +18,7 @@ export class RagTimeMonitoringStack extends cdk.NestedStack {
   public readonly corsTestCanary: synthetics.Canary;
   public readonly databaseTestCanary: synthetics.Canary;
   public readonly documentWorkflowCanary: synthetics.Canary;
+  public readonly correlationDashboard: cloudwatch.Dashboard;
 
   constructor(scope: Construct, id: string, props: RagTimeMonitoringStackProps) {
     super(scope, id, props);
@@ -1136,6 +1138,66 @@ exports.handler = async () => {
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+
+    // CloudWatch Dashboard for Correlation ID Analysis
+    if (pipelineTestingFunctionName) {
+      this.correlationDashboard = new cloudwatch.Dashboard(this, 'CorrelationDashboard', {
+        dashboardName: `RagTime-Correlation-Analysis-${environment}`,
+        defaultInterval: cdk.Duration.hours(24),
+      });
+
+      // Add instructions widget for correlation ID analysis  
+      this.correlationDashboard.addWidgets(
+        new cloudwatch.TextWidget({
+          markdown: `# 📊 Pipeline Executions by Correlation ID
+
+## 🔗 CloudWatch Logs Insights Query
+
+Use the following query in [CloudWatch Logs Insights](https://console.aws.amazon.com/cloudwatch/home?region=${cdk.Aws.REGION}#logsV2:logs-insights) with log group:
+\`/aws/lambda/${pipelineTestingFunctionName}\`
+
+### Query:
+\`\`\`
+fields @timestamp, @message
+| filter @message like /CANARY_COMPLETE/
+| parse @message /correlationId":"(?<correlationId>[^"]+)/
+| parse @message /success":(?<success>\\w+)/
+| parse @message /totalDuration":(?<duration>\\d+)/
+| parse @message /"passed":(?<passed>\\d+)/
+| parse @message /"failed":(?<failed>\\d+)/
+| parse @message /"total":(?<total>\\d+)/
+| stats latest(@timestamp) as LastExecution, 
+        latest(success) as Success, 
+        latest(duration) as DurationMs, 
+        latest(passed) as PassedSteps, 
+        latest(failed) as FailedSteps, 
+        latest(total) as TotalSteps 
+  by correlationId
+| sort LastExecution desc
+\`\`\`
+
+### Columns Explained:
+- **correlationId**: Unique identifier for each pipeline execution
+- **LastExecution**: Most recent execution timestamp  
+- **Success**: Whether pipeline succeeded (true/false)
+- **DurationMs**: Total execution time in milliseconds
+- **PassedSteps**: Number of successful steps
+- **FailedSteps**: Number of failed steps  
+- **TotalSteps**: Total steps executed
+
+### Direct Link:
+[📊 Open Logs Insights Query](https://console.aws.amazon.com/cloudwatch/home?region=${cdk.Aws.REGION}#logsV2:logs-insights$3FqueryDetail$3D~(end~0~start~-86400~timeType~'RELATIVE~unit~'seconds~editorString~'fields*20*40timestamp*2c*20*40message*0a*7c*20filter*20*40message*20like*20*2fCANARY_COMPLETE*2f*0a*7c*20parse*20*40message*20*2fcorrelationId*5c*22*3a*5c*22*28*3fcorrelationId*5b*5e*5c*22*5d*2b*29*2f*0a*7c*20parse*20*40message*20*2fsuccess*5c*22*3a*28*3fsuccess*5c*5cw*2b*29*2f*0a*7c*20parse*20*40message*20*2ftotalDuration*5c*22*3a*28*3fduration*5c*5cd*2b*29*2f*0a*7c*20parse*20*40message*20*2f*5c*22passed*5c*22*3a*28*3fpassed*5c*5cd*2b*29*2f*0a*7c*20parse*20*40message*20*2f*5c*22failed*5c*22*3a*28*3ffailed*5c*5cd*2b*29*2f*0a*7c*20parse*20*40message*20*2f*5c*22total*5c*22*3a*28*3ftotal*5c*5cd*2b*29*2f*0a*7c*20stats*20latest*28*40timestamp*29*20as*20LastExecution*2c*20latest*28success*29*20as*20Success*2c*20latest*28duration*29*20as*20DurationMs*2c*20latest*28passed*29*20as*20PassedSteps*2c*20latest*28failed*29*20as*20FailedSteps*2c*20latest*28total*29*20as*20TotalSteps*20by*20correlationId*0a*7c*20sort*20LastExecution*20desc~source~(~'*2faws*2flambda*2f${pipelineTestingFunctionName}))`,
+          width: 24,
+          height: 16,
+        }),
+      );
+
+      // Add dashboard URL to outputs
+      new cdk.CfnOutput(this, 'CorrelationDashboardUrl', {
+        value: `https://console.aws.amazon.com/cloudwatch/home?region=${cdk.Aws.REGION}#dashboards:name=${this.correlationDashboard.dashboardName}`,
+        description: 'URL to the correlation ID analysis dashboard',
+      });
+    }
 
     // Outputs (no exports to avoid circular dependencies with toolkit stack)
     new cdk.CfnOutput(this, 'CanaryArtifactsBucketName', {
