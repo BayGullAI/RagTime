@@ -17,7 +17,7 @@ async function findApiGatewayUrl(): Promise<string> {
     
     if (ragTimeApi) {
       const region = process.env.AWS_REGION || 'us-east-1';
-      return `https://${ragTimeApi.id}.execute-api.${region}.amazonaws.com/prod`;
+      return `https://${ragTimeApi.id}.execute-api.${region}.amazonaws.com/dev`;
     }
   } catch (error) {
     // Fallback to environment variable or default
