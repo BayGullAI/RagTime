@@ -3,6 +3,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
+import { createResponse, createErrorResponse } from '../../utils/response.utils';
 
 interface DocumentMetadata {
   tenant_id: string;
@@ -208,18 +209,6 @@ async function updateDocumentStatus(
 }
 
 
-function createResponse(statusCode: number, body: any): APIGatewayProxyResult {
-  return {
-    statusCode,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-    },
-    body: JSON.stringify(body),
-  };
-}
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   const startTime = Date.now();
@@ -328,11 +317,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }
     }
 
-    return createResponse(500, {
-      success: false,
-      error: 'Document upload failed',
-      message: error instanceof Error ? error.message : 'Unknown error occurred',
-      processing_time: Date.now() - startTime,
-    });
+    return createErrorResponse(
+      500,
+      'Document upload failed',
+      error instanceof Error ? error.message : 'Unknown error occurred',
+      { processing_time: Date.now() - startTime }
+    );
   }
 };
