@@ -1,6 +1,7 @@
 import { Handler } from 'aws-lambda';
 import { Client } from 'pg';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -129,12 +130,12 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
         console.log('Database connection verified');
         break;
         
-      } catch (connError) {
+      } catch (connError: any) {
         connectionAttempts++;
         console.warn(`Connection attempt ${connectionAttempts}/${maxAttempts} failed:`, connError);
         
         if (connectionAttempts >= maxAttempts) {
-          throw new Error(`Failed to connect to database after ${maxAttempts} attempts: ${connError.message}`);
+          throw new Error(`Failed to connect to database after ${maxAttempts} attempts: ${connError?.message || String(connError)}`);
         }
         
         // Longer wait for Aurora Serverless V2 scale-up (up to 30 seconds for first connection)
@@ -159,19 +160,39 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     }
     console.log('pgvector extension is available');
 
-    // Read migration SQL from file
-    const migrationSQL = fs.readFileSync(
-      path.join(__dirname, '001_initial_pgvector_schema.sql'),
-      'utf8'
-    );
-    console.log('Migration SQL loaded, length:', migrationSQL.length);
+    // Download migration SQL from S3 with fallback to embedded SQL
+    let migrationSQL: string;
+    
+    try {
+      console.log('Downloading SQL file from S3...');
+      
+      // Initialize S3 client
+      const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+      
+      // Download SQL file from S3
+      const response = await s3Client.send(new GetObjectCommand({
+        Bucket: process.env.SQL_ASSET_BUCKET,
+        Key: process.env.SQL_ASSET_KEY,
+      }));
+      
+      if (!response.Body) {
+        throw new Error('No SQL file content received from S3');
+      }
+      
+      migrationSQL = await response.Body.transformToString();
+      console.log('Migration SQL downloaded successfully from S3, length:', migrationSQL.length);
+      
+    } catch (s3Error) {
+      console.error('Failed to download migration SQL file from S3:', s3Error);
+      throw new Error(`Cannot proceed without SQL migration file. S3 download failed: ${s3Error instanceof Error ? s3Error.message : String(s3Error)}`);
+    }
     
     // Execute migration SQL
     console.log('Executing database migration...');
     await client.query(migrationSQL);
     console.log('Database schema initialized successfully');
     
-    // Verify that tables were created
+    // Basic verification that key tables were created
     const tableCheck = await client.query(`
       SELECT table_name 
       FROM information_schema.tables 
@@ -187,7 +208,8 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     await sendResponse(event, 'SUCCESS', {
       message: 'Database schema initialized successfully',
       tablesCreated: tableCheck.rows.map(row => row.table_name),
-      migrationVersion: '001_initial_pgvector_schema'
+      migrationVersion: '001_initial_pgvector_schema',
+      sqlSource: 's3'
     });
     
   } catch (error) {

@@ -9,6 +9,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as triggers from 'aws-cdk-lib/triggers';
 import { Construct } from 'constructs';
 import * as path from 'path';
+import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 
 export interface RagTimeCoreStackProps extends cdk.NestedStackProps {
   environment: string;
@@ -134,6 +135,11 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
 
+    // Upload SQL migration file to S3 as asset
+    const sqlAsset = new s3assets.Asset(this, 'SqlMigrationAsset', {
+      path: path.join(__dirname, '../../lambda/database-migration/001_initial_pgvector_schema.sql'),
+    });
+
     // Create Lambda function to initialize database schema
     const migrationLambda = new NodejsFunction(this, 'DatabaseMigrationFunction', {
       description: 'Initialize database schema with pgvector extension and tables',
@@ -151,6 +157,8 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         DATABASE_CLUSTER_ENDPOINT: this.databaseCluster.clusterEndpoint.hostname,
         DATABASE_SECRET_NAME: this.databaseSecret.secretName,
         DATABASE_NAME: 'ragtime',
+        SQL_ASSET_BUCKET: sqlAsset.bucket.bucketName,
+        SQL_ASSET_KEY: sqlAsset.s3ObjectKey,
       },
       bundling: {
         minify: false,
@@ -158,25 +166,16 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         target: 'es2020',
         externalModules: [
           '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+          // Note: 'pg' module needs to be bundled as it's not available in Lambda runtime
         ],
-        commandHooks: {
-          beforeBundling: (inputDir: string, outputDir: string): string[] => {
-            return [];
-          },
-          afterBundling: (inputDir: string, outputDir: string): string[] => {
-            return [
-              `cp ${inputDir}/infrastructure/lambda/database-migration/001_initial_pgvector_schema.sql ${outputDir}/001_initial_pgvector_schema.sql`
-            ];
-          },
-          beforeInstall: (inputDir: string, outputDir: string): string[] => {
-            return [];
-          },
-        },
       },
     });
 
     // Grant Lambda access to read database secret
     this.databaseSecret.grantRead(migrationLambda);
+    
+    // Grant Lambda access to read SQL asset from S3
+    sqlAsset.grantRead(migrationLambda);
 
     // Create trigger to run migration Lambda after database cluster and instances are ready
     this.databaseInitialization = new triggers.Trigger(this, 'InitialSchemaMigration', {
