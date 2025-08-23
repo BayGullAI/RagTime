@@ -14,6 +14,8 @@ export class RagTimeMonitoringStack extends cdk.NestedStack {
   public readonly healthCheckCanary: synthetics.Canary;
   public readonly corsTestCanary: synthetics.Canary;
   public readonly databaseTestCanary: synthetics.Canary;
+  public readonly documentUploadCanary: synthetics.Canary;
+  public readonly documentCrudCanary: synthetics.Canary;
 
   constructor(scope: Construct, id: string, props: RagTimeMonitoringStackProps) {
     super(scope, id, props);
@@ -516,6 +518,428 @@ exports.handler = async () => {
       },
     });
 
+    // Document Upload Canary
+    this.documentUploadCanary = new synthetics.Canary(this, 'DocumentUploadCanary', {
+      canaryName: `ragtime-upload-${environment}`,
+      schedule: synthetics.Schedule.rate(cdk.Duration.minutes(30)),
+      test: synthetics.Test.custom({
+        code: synthetics.Code.fromInline(`
+const synthetics = require('Synthetics');
+const log = require('SyntheticsLogger');
+const https = require('https');
+const { URL } = require('url');
+
+const documentUploadBlueprint = async function () {
+    const uploadUrl = '${apiGatewayUrl}documents';
+    const testTenantId = 'canary-test-' + Date.now();
+    const testFileName = 'canary-test-document.txt';
+    const testContent = 'This is a test document created by the CloudWatch Canary for monitoring document upload functionality. Created at: ' + new Date().toISOString();
+    
+    log.info('Starting document upload test for: ' + uploadUrl);
+    
+    // Create multipart form data
+    const boundary = 'canary-boundary-' + Date.now();
+    const formData = [
+        \`--\${boundary}\`,
+        'Content-Disposition: form-data; name="tenant_id"',
+        '',
+        testTenantId,
+        \`--\${boundary}\`,
+        \`Content-Disposition: form-data; name="file"; filename="\${testFileName}"\`,
+        'Content-Type: text/plain',
+        '',
+        testContent,
+        \`--\${boundary}--\`,
+    ].join('\\r\\n');
+    
+    return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        
+        try {
+            const parsedUrl = new URL(uploadUrl);
+            
+            const options = {
+                hostname: parsedUrl.hostname,
+                port: parsedUrl.port || 443,
+                path: parsedUrl.pathname,
+                method: 'POST',
+                headers: {
+                    'Content-Type': \`multipart/form-data; boundary=\${boundary}\`,
+                    'Content-Length': Buffer.byteLength(formData),
+                    'User-Agent': 'AWS-Synthetics-Canary'
+                }
+            };
+            
+            const req = https.request(options, (res) => {
+                let responseBody = '';
+                
+                res.on('data', (chunk) => {
+                    responseBody += chunk;
+                });
+                
+                res.on('end', () => {
+                    const responseTime = Date.now() - startTime;
+                    
+                    try {
+                        // Check status code
+                        if (res.statusCode !== 200) {
+                            reject(new Error(\`Document upload failed with status: \${res.statusCode} - \${responseBody}\`));
+                            return;
+                        }
+                        
+                        // Parse JSON response
+                        let uploadData;
+                        try {
+                            uploadData = JSON.parse(responseBody);
+                        } catch (parseError) {
+                            reject(new Error(\`Upload response is not valid JSON: \${parseError.message}\`));
+                            return;
+                        }
+                        
+                        // Validate upload response
+                        if (!uploadData.success) {
+                            reject(new Error(\`Upload not successful: \${uploadData.message || 'Unknown error'}\`));
+                            return;
+                        }
+                        
+                        if (!uploadData.document || !uploadData.document.asset_id) {
+                            reject(new Error('Upload response missing document or asset_id'));
+                            return;
+                        }
+                        
+                        if (!uploadData.document.tenant_id || uploadData.document.tenant_id !== testTenantId) {
+                            reject(new Error(\`Upload response tenant_id mismatch: expected \${testTenantId}, got \${uploadData.document.tenant_id}\`));
+                            return;
+                        }
+                        
+                        if (uploadData.document.status !== 'PROCESSED') {
+                            reject(new Error(\`Upload document status is not PROCESSED: \${uploadData.document.status}\`));
+                            return;
+                        }
+                        
+                        // Verify response time (uploads can be slower)
+                        if (responseTime > 30000) {
+                            reject(new Error(\`Upload response time too slow: \${responseTime}ms\`));
+                            return;
+                        }
+                        
+                        log.info(\`Document upload test passed - Asset ID: \${uploadData.document.asset_id}, Response time: \${responseTime}ms\`);
+                        resolve();
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            });
+            
+            req.on('error', (error) => {
+                reject(new Error(\`Document upload request failed: \${error.message}\`));
+            });
+            
+            req.setTimeout(45000, () => {
+                req.destroy();
+                reject(new Error('Document upload request timed out'));
+            });
+            
+            req.write(formData);
+            req.end();
+        } catch (error) {
+            reject(new Error(\`Document upload test failed: \${error.message}\`));
+        }
+    });
+};
+
+exports.handler = async () => {
+    return await synthetics.executeStep('documentUpload', documentUploadBlueprint);
+};
+        `),
+        handler: 'index.handler',
+      }),
+      runtime: new synthetics.Runtime('syn-nodejs-puppeteer-10.0', synthetics.RuntimeFamily.NODEJS),
+      environmentVariables: {
+        API_URL: apiGatewayUrl,
+      },
+      role: canaryExecutionRole,
+      artifactsBucketLocation: {
+        bucket: canaryArtifactsBucket,
+        prefix: 'document-upload-canary',
+      },
+    });
+
+    // Document CRUD Canary (Read and Delete operations)
+    this.documentCrudCanary = new synthetics.Canary(this, 'DocumentCrudCanary', {
+      canaryName: `ragtime-crud-${environment}`,
+      schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
+      test: synthetics.Test.custom({
+        code: synthetics.Code.fromInline(`
+const synthetics = require('Synthetics');
+const log = require('SyntheticsLogger');
+const https = require('https');
+const { URL } = require('url');
+
+const documentCrudBlueprint = async function () {
+    const baseUrl = '${apiGatewayUrl}documents';
+    const testTenantId = 'canary-crud-' + Date.now();
+    
+    log.info('Starting document CRUD test for: ' + baseUrl);
+    
+    // Test 1: List documents (Read operation)
+    log.info('Testing document list endpoint...');
+    
+    await new Promise((resolve, reject) => {
+        const listUrl = \`\${baseUrl}?tenant_id=\${testTenantId}&limit=10\`;
+        const parsedUrl = new URL(listUrl);
+        
+        const options = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || 443,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'AWS-Synthetics-Canary'
+            }
+        };
+        
+        const req = https.request(options, (res) => {
+            let responseBody = '';
+            
+            res.on('data', (chunk) => {
+                responseBody += chunk;
+            });
+            
+            res.on('end', () => {
+                try {
+                    if (res.statusCode !== 200) {
+                        reject(new Error(\`Document list failed with status: \${res.statusCode} - \${responseBody}\`));
+                        return;
+                    }
+                    
+                    let listData;
+                    try {
+                        listData = JSON.parse(responseBody);
+                    } catch (parseError) {
+                        reject(new Error(\`List response is not valid JSON: \${parseError.message}\`));
+                        return;
+                    }
+                    
+                    if (!Array.isArray(listData.documents)) {
+                        reject(new Error('List response missing documents array'));
+                        return;
+                    }
+                    
+                    if (typeof listData.total_count !== 'number') {
+                        reject(new Error('List response missing total_count'));
+                        return;
+                    }
+                    
+                    log.info(\`Document list test passed - Found \${listData.documents.length} documents\`);
+                    resolve();
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
+        
+        req.on('error', (error) => {
+            reject(new Error(\`Document list request failed: \${error.message}\`));
+        });
+        
+        req.setTimeout(10000, () => {
+            req.destroy();
+            reject(new Error('Document list request timed out'));
+        });
+        
+        req.end();
+    });
+    
+    // Test 2: Get specific document (Read operation) - using known pattern
+    log.info('Testing document get endpoint...');
+    
+    await new Promise((resolve, reject) => {
+        const testAssetId = 'test-canary-asset-' + Date.now();
+        const getUrl = \`\${baseUrl}/\${testAssetId}?tenant_id=\${testTenantId}\`;
+        const parsedUrl = new URL(getUrl);
+        
+        const options = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || 443,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'AWS-Synthetics-Canary'
+            }
+        };
+        
+        const req = https.request(options, (res) => {
+            let responseBody = '';
+            
+            res.on('data', (chunk) => {
+                responseBody += chunk;
+            });
+            
+            res.on('end', () => {
+                try {
+                    // For non-existent document, we expect 404 - this is valid behavior
+                    if (res.statusCode === 404) {
+                        let errorData;
+                        try {
+                            errorData = JSON.parse(responseBody);
+                        } catch (parseError) {
+                            reject(new Error(\`404 response is not valid JSON: \${parseError.message}\`));
+                            return;
+                        }
+                        
+                        if (errorData.error === 'Document not found') {
+                            log.info('Document get test passed - 404 response for non-existent document is correct');
+                            resolve();
+                            return;
+                        }
+                    }
+                    
+                    // If we get 200, validate the response structure
+                    if (res.statusCode === 200) {
+                        let getData;
+                        try {
+                            getData = JSON.parse(responseBody);
+                        } catch (parseError) {
+                            reject(new Error(\`Get response is not valid JSON: \${parseError.message}\`));
+                            return;
+                        }
+                        
+                        if (!getData.document) {
+                            reject(new Error('Get response missing document'));
+                            return;
+                        }
+                        
+                        log.info('Document get test passed - Found existing document');
+                        resolve();
+                        return;
+                    }
+                    
+                    reject(new Error(\`Document get returned unexpected status: \${res.statusCode} - \${responseBody}\`));
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
+        
+        req.on('error', (error) => {
+            reject(new Error(\`Document get request failed: \${error.message}\`));
+        });
+        
+        req.setTimeout(10000, () => {
+            req.destroy();
+            reject(new Error('Document get request timed out'));
+        });
+        
+        req.end();
+    });
+    
+    // Test 3: Delete endpoint structure test (Delete operation)
+    log.info('Testing document delete endpoint structure...');
+    
+    await new Promise((resolve, reject) => {
+        const testAssetId = 'test-canary-delete-' + Date.now();
+        const deleteUrl = \`\${baseUrl}/\${testAssetId}?tenant_id=\${testTenantId}\`;
+        const parsedUrl = new URL(deleteUrl);
+        
+        const options = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || 443,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'AWS-Synthetics-Canary'
+            }
+        };
+        
+        const req = https.request(options, (res) => {
+            let responseBody = '';
+            
+            res.on('data', (chunk) => {
+                responseBody += chunk;
+            });
+            
+            res.on('end', () => {
+                try {
+                    // For non-existent document, we expect 404 - this is valid behavior
+                    if (res.statusCode === 404) {
+                        let errorData;
+                        try {
+                            errorData = JSON.parse(responseBody);
+                        } catch (parseError) {
+                            reject(new Error(\`Delete 404 response is not valid JSON: \${parseError.message}\`));
+                            return;
+                        }
+                        
+                        if (errorData.error === 'Document not found') {
+                            log.info('Document delete test passed - 404 response for non-existent document is correct');
+                            resolve();
+                            return;
+                        }
+                    }
+                    
+                    // If we get 200, validate the response structure
+                    if (res.statusCode === 200) {
+                        let deleteData;
+                        try {
+                            deleteData = JSON.parse(responseBody);
+                        } catch (parseError) {
+                            reject(new Error(\`Delete response is not valid JSON: \${parseError.message}\`));
+                            return;
+                        }
+                        
+                        if (!deleteData.success) {
+                            reject(new Error('Delete response missing success field'));
+                            return;
+                        }
+                        
+                        log.info('Document delete test passed - Delete operation completed successfully');
+                        resolve();
+                        return;
+                    }
+                    
+                    reject(new Error(\`Document delete returned unexpected status: \${res.statusCode} - \${responseBody}\`));
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
+        
+        req.on('error', (error) => {
+            reject(new Error(\`Document delete request failed: \${error.message}\`));
+        });
+        
+        req.setTimeout(10000, () => {
+            req.destroy();
+            reject(new Error('Document delete request timed out'));
+        });
+        
+        req.end();
+    });
+    
+    log.info('All document CRUD tests completed successfully');
+};
+
+exports.handler = async () => {
+    return await synthetics.executeStep('documentCrud', documentCrudBlueprint);
+};
+        `),
+        handler: 'index.handler',
+      }),
+      runtime: new synthetics.Runtime('syn-nodejs-puppeteer-10.0', synthetics.RuntimeFamily.NODEJS),
+      environmentVariables: {
+        API_URL: apiGatewayUrl,
+      },
+      role: canaryExecutionRole,
+      artifactsBucketLocation: {
+        bucket: canaryArtifactsBucket,
+        prefix: 'document-crud-canary',
+      },
+    });
+
     // CloudWatch Log Groups for canaries (with retention)
     new logs.LogGroup(this, 'HealthCheckCanaryLogGroup', {
       logGroupName: `/aws/lambda/cwsyn-${this.healthCheckCanary.canaryName}`,
@@ -531,6 +955,18 @@ exports.handler = async () => {
 
     new logs.LogGroup(this, 'DatabaseTestCanaryLogGroup', {
       logGroupName: `/aws/lambda/cwsyn-${this.databaseTestCanary.canaryName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new logs.LogGroup(this, 'DocumentUploadCanaryLogGroup', {
+      logGroupName: `/aws/lambda/cwsyn-${this.documentUploadCanary.canaryName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new logs.LogGroup(this, 'DocumentCrudCanaryLogGroup', {
+      logGroupName: `/aws/lambda/cwsyn-${this.documentCrudCanary.canaryName}`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -554,6 +990,16 @@ exports.handler = async () => {
     new cdk.CfnOutput(this, 'DatabaseTestCanaryName', {
       value: this.databaseTestCanary.canaryName,
       description: 'Name of the database connection test canary',
+    });
+
+    new cdk.CfnOutput(this, 'DocumentUploadCanaryName', {
+      value: this.documentUploadCanary.canaryName,
+      description: 'Name of the document upload test canary',
+    });
+
+    new cdk.CfnOutput(this, 'DocumentCrudCanaryName', {
+      value: this.documentCrudCanary.canaryName,
+      description: 'Name of the document CRUD test canary',
     });
   }
 }
