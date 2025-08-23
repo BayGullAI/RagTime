@@ -29,6 +29,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   public readonly textProcessingLambda: NodejsFunction;
   public readonly documentUploadLambda: NodejsFunction;
   public readonly documentCrudLambda: NodejsFunction;
+  public readonly documentAnalysisLambda: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
@@ -358,6 +359,39 @@ exports.handler = async (event, context) => {
       }
     });
 
+    // Document Analysis Lambda Function
+    this.documentAnalysisLambda = new NodejsFunction(this, 'DocumentAnalysisFunction', {
+      description: 'Document analysis with PostgreSQL and embeddings data',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'handler',
+      entry: path.join(__dirname, '../../../backend/src/lambdas/document-analysis/index.ts'),
+      timeout: cdk.Duration.minutes(2),
+      memorySize: 512,
+      role: lambdaExecutionRole,
+      vpc: vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      environment: {
+        ENVIRONMENT: environment,
+        DOCUMENTS_TABLE_NAME: documentsTable.tableName,
+        DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+        DATABASE_SECRET_NAME: databaseSecret.secretName,
+        DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
+        DATABASE_NAME: 'ragtime',
+      },
+      bundling: {
+        minify: false,
+        sourceMap: true,
+        target: 'es2020',
+        externalModules: [
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+        ],
+        // Bundle pg since it's needed for database connections
+      }
+    });
+
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
       description: `RagTime REST API for ${environment} environment`,
@@ -501,6 +535,25 @@ exports.handler = async (event, context) => {
       ],
     });
 
+    // GET /documents/{asset_id}/analysis - Get document analysis (PostgreSQL + embeddings)
+    const documentAnalysisResource = documentDetailResource.addResource('analysis');
+    const documentAnalysisIntegration = new apigateway.LambdaIntegration(this.documentAnalysisLambda, {
+      proxy: true,
+    });
+
+    documentAnalysisResource.addMethod('GET', documentAnalysisIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
     // Text processing endpoint
     const processResource = this.api.root.addResource('process');
     const textProcessingIntegration = new apigateway.LambdaIntegration(this.textProcessingLambda, {
@@ -554,6 +607,11 @@ exports.handler = async (event, context) => {
     new cdk.CfnOutput(this, 'DocumentCrudEndpoint', {
       value: `${this.api.url}documents/{asset_id}`,
       description: 'Document CRUD endpoint URL (GET/DELETE)',
+    });
+
+    new cdk.CfnOutput(this, 'DocumentAnalysisEndpoint', {
+      value: `${this.api.url}documents/{asset_id}/analysis`,
+      description: 'Document analysis endpoint URL (GET)',
     });
   }
 }
