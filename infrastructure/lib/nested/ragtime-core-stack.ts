@@ -149,9 +149,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         sourceMap: true,
         target: 'es2020',
         externalModules: [
-          'aws-sdk', // AWS SDK v2 is provided by the Lambda runtime
-          '@aws-sdk/*', // AWS SDK v3 modules
-          // 'pg' removed - must be bundled as it's not provided by Lambda runtime
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
         ],
         commandHooks: {
           beforeBundling: (inputDir: string, outputDir: string): string[] => {
