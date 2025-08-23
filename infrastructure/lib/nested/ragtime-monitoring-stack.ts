@@ -14,8 +14,7 @@ export class RagTimeMonitoringStack extends cdk.NestedStack {
   public readonly healthCheckCanary: synthetics.Canary;
   public readonly corsTestCanary: synthetics.Canary;
   public readonly databaseTestCanary: synthetics.Canary;
-  public readonly documentUploadCanary: synthetics.Canary;
-  public readonly documentCrudCanary: synthetics.Canary;
+  public readonly documentWorkflowCanary: synthetics.Canary;
 
   constructor(scope: Construct, id: string, props: RagTimeMonitoringStackProps) {
     super(scope, id, props);
@@ -518,9 +517,9 @@ exports.handler = async () => {
       },
     });
 
-    // Document Upload Canary
-    this.documentUploadCanary = new synthetics.Canary(this, 'DocumentUploadCanary', {
-      canaryName: `ragtime-upload-${environment}`,
+    // Document Workflow Canary - Complete end-to-end document lifecycle test
+    this.documentWorkflowCanary = new synthetics.Canary(this, 'DocumentWorkflowCanary', {
+      canaryName: `ragtime-workflow-${environment}`,
       schedule: synthetics.Schedule.rate(cdk.Duration.minutes(30)),
       test: synthetics.Test.custom({
         code: synthetics.Code.fromInline(`
@@ -529,164 +528,119 @@ const log = require('SyntheticsLogger');
 const https = require('https');
 const { URL } = require('url');
 
-const documentUploadBlueprint = async function () {
-    const uploadUrl = '${apiGatewayUrl}documents';
-    const testTenantId = 'canary-test-' + Date.now();
-    const testFileName = 'canary-test-document.txt';
-    const testContent = 'This is a test document created by the CloudWatch Canary for monitoring document upload functionality. Created at: ' + new Date().toISOString();
-    
-    log.info('Starting document upload test for: ' + uploadUrl);
-    
-    // Create multipart form data
-    const boundary = 'canary-boundary-' + Date.now();
-    const formData = [
-        \`--\${boundary}\`,
-        'Content-Disposition: form-data; name="tenant_id"',
-        '',
-        testTenantId,
-        \`--\${boundary}\`,
-        \`Content-Disposition: form-data; name="file"; filename="\${testFileName}"\`,
-        'Content-Type: text/plain',
-        '',
-        testContent,
-        \`--\${boundary}--\`,
-    ].join('\\r\\n');
-    
-    return new Promise((resolve, reject) => {
-        const startTime = Date.now();
-        
-        try {
-            const parsedUrl = new URL(uploadUrl);
-            
-            const options = {
-                hostname: parsedUrl.hostname,
-                port: parsedUrl.port || 443,
-                path: parsedUrl.pathname,
-                method: 'POST',
-                headers: {
-                    'Content-Type': \`multipart/form-data; boundary=\${boundary}\`,
-                    'Content-Length': Buffer.byteLength(formData),
-                    'User-Agent': 'AWS-Synthetics-Canary'
-                }
-            };
-            
-            const req = https.request(options, (res) => {
-                let responseBody = '';
-                
-                res.on('data', (chunk) => {
-                    responseBody += chunk;
-                });
-                
-                res.on('end', () => {
-                    const responseTime = Date.now() - startTime;
-                    
-                    try {
-                        // Check status code
-                        if (res.statusCode !== 200) {
-                            reject(new Error(\`Document upload failed with status: \${res.statusCode} - \${responseBody}\`));
-                            return;
-                        }
-                        
-                        // Parse JSON response
-                        let uploadData;
-                        try {
-                            uploadData = JSON.parse(responseBody);
-                        } catch (parseError) {
-                            reject(new Error(\`Upload response is not valid JSON: \${parseError.message}\`));
-                            return;
-                        }
-                        
-                        // Validate upload response
-                        if (!uploadData.success) {
-                            reject(new Error(\`Upload not successful: \${uploadData.message || 'Unknown error'}\`));
-                            return;
-                        }
-                        
-                        if (!uploadData.document || !uploadData.document.asset_id) {
-                            reject(new Error('Upload response missing document or asset_id'));
-                            return;
-                        }
-                        
-                        if (!uploadData.document.tenant_id || uploadData.document.tenant_id !== testTenantId) {
-                            reject(new Error(\`Upload response tenant_id mismatch: expected \${testTenantId}, got \${uploadData.document.tenant_id}\`));
-                            return;
-                        }
-                        
-                        if (uploadData.document.status !== 'PROCESSED') {
-                            reject(new Error(\`Upload document status is not PROCESSED: \${uploadData.document.status}\`));
-                            return;
-                        }
-                        
-                        // Verify response time (uploads can be slower)
-                        if (responseTime > 30000) {
-                            reject(new Error(\`Upload response time too slow: \${responseTime}ms\`));
-                            return;
-                        }
-                        
-                        log.info(\`Document upload test passed - Asset ID: \${uploadData.document.asset_id}, Response time: \${responseTime}ms\`);
-                        resolve();
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            });
-            
-            req.on('error', (error) => {
-                reject(new Error(\`Document upload request failed: \${error.message}\`));
-            });
-            
-            req.setTimeout(45000, () => {
-                req.destroy();
-                reject(new Error('Document upload request timed out'));
-            });
-            
-            req.write(formData);
-            req.end();
-        } catch (error) {
-            reject(new Error(\`Document upload test failed: \${error.message}\`));
-        }
-    });
-};
-
-exports.handler = async () => {
-    return await synthetics.executeStep('documentUpload', documentUploadBlueprint);
-};
-        `),
-        handler: 'index.handler',
-      }),
-      runtime: new synthetics.Runtime('syn-nodejs-puppeteer-10.0', synthetics.RuntimeFamily.NODEJS),
-      environmentVariables: {
-        API_URL: apiGatewayUrl,
-      },
-      role: canaryExecutionRole,
-      artifactsBucketLocation: {
-        bucket: canaryArtifactsBucket,
-        prefix: 'document-upload-canary',
-      },
-    });
-
-    // Document CRUD Canary (Read and Delete operations)
-    this.documentCrudCanary = new synthetics.Canary(this, 'DocumentCrudCanary', {
-      canaryName: `ragtime-crud-${environment}`,
-      schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
-      test: synthetics.Test.custom({
-        code: synthetics.Code.fromInline(`
-const synthetics = require('Synthetics');
-const log = require('SyntheticsLogger');
-const https = require('https');
-const { URL } = require('url');
-
-const documentCrudBlueprint = async function () {
+const documentWorkflowBlueprint = async function () {
     const baseUrl = '${apiGatewayUrl}documents';
-    const testTenantId = 'canary-crud-' + Date.now();
+    const testTenantId = 'canary-workflow-' + Date.now();
+    const testFileName = 'canary-test-document.txt';
+    const testContent = 'This is a test document created by the CloudWatch Canary for end-to-end workflow testing. Created at: ' + new Date().toISOString();
+    let uploadedAssetId = null;
     
-    log.info('Starting document CRUD test for: ' + baseUrl);
+    log.info('Starting complete document workflow test for: ' + baseUrl);
+    log.info('Test tenant ID: ' + testTenantId);
     
-    // Test 1: List documents (Read operation)
-    log.info('Testing document list endpoint...');
+    // STEP 1: Upload document
+    log.info('STEP 1: Uploading test document...');
+    
+    uploadedAssetId = await new Promise((resolve, reject) => {
+        const boundary = 'canary-boundary-' + Date.now();
+        const formData = [
+            \`--\${boundary}\`,
+            'Content-Disposition: form-data; name="tenant_id"',
+            '',
+            testTenantId,
+            \`--\${boundary}\`,
+            \`Content-Disposition: form-data; name="file"; filename="\${testFileName}"\`,
+            'Content-Type: text/plain',
+            '',
+            testContent,
+            \`--\${boundary}--\`,
+        ].join('\\r\\n');
+        
+        const startTime = Date.now();
+        const parsedUrl = new URL(baseUrl);
+        
+        const options = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || 443,
+            path: parsedUrl.pathname,
+            method: 'POST',
+            headers: {
+                'Content-Type': \`multipart/form-data; boundary=\${boundary}\`,
+                'Content-Length': Buffer.byteLength(formData),
+                'User-Agent': 'AWS-Synthetics-Canary'
+            }
+        };
+        
+        const req = https.request(options, (res) => {
+            let responseBody = '';
+            
+            res.on('data', (chunk) => {
+                responseBody += chunk;
+            });
+            
+            res.on('end', () => {
+                const responseTime = Date.now() - startTime;
+                
+                try {
+                    if (res.statusCode !== 200) {
+                        reject(new Error(\`Upload failed with status: \${res.statusCode} - \${responseBody}\`));
+                        return;
+                    }
+                    
+                    let uploadData;
+                    try {
+                        uploadData = JSON.parse(responseBody);
+                    } catch (parseError) {
+                        reject(new Error(\`Upload response is not valid JSON: \${parseError.message}\`));
+                        return;
+                    }
+                    
+                    if (!uploadData.success || !uploadData.document?.asset_id) {
+                        reject(new Error('Upload response missing success or asset_id'));
+                        return;
+                    }
+                    
+                    if (uploadData.document.tenant_id !== testTenantId) {
+                        reject(new Error(\`Tenant ID mismatch: expected \${testTenantId}, got \${uploadData.document.tenant_id}\`));
+                        return;
+                    }
+                    
+                    if (uploadData.document.status !== 'PROCESSED') {
+                        reject(new Error(\`Document status is not PROCESSED: \${uploadData.document.status}\`));
+                        return;
+                    }
+                    
+                    if (responseTime > 30000) {
+                        reject(new Error(\`Upload took too long: \${responseTime}ms\`));
+                        return;
+                    }
+                    
+                    log.info(\`✅ Upload successful - Asset ID: \${uploadData.document.asset_id}, Time: \${responseTime}ms\`);
+                    resolve(uploadData.document.asset_id);
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
+        
+        req.on('error', (error) => {
+            reject(new Error(\`Upload request failed: \${error.message}\`));
+        });
+        
+        req.setTimeout(45000, () => {
+            req.destroy();
+            reject(new Error('Upload request timed out'));
+        });
+        
+        req.write(formData);
+        req.end();
+    });
+    
+    // STEP 2: List all documents for tenant
+    log.info('STEP 2: Listing all documents for tenant...');
     
     await new Promise((resolve, reject) => {
-        const listUrl = \`\${baseUrl}?tenant_id=\${testTenantId}&limit=10\`;
+        const listUrl = \`\${baseUrl}?tenant_id=\${testTenantId}&limit=50\`;
         const parsedUrl = new URL(listUrl);
         
         const options = {
@@ -710,7 +664,7 @@ const documentCrudBlueprint = async function () {
             res.on('end', () => {
                 try {
                     if (res.statusCode !== 200) {
-                        reject(new Error(\`Document list failed with status: \${res.statusCode} - \${responseBody}\`));
+                        reject(new Error(\`List documents failed with status: \${res.statusCode} - \${responseBody}\`));
                         return;
                     }
                     
@@ -732,7 +686,14 @@ const documentCrudBlueprint = async function () {
                         return;
                     }
                     
-                    log.info(\`Document list test passed - Found \${listData.documents.length} documents\`);
+                    // Find our uploaded document in the list
+                    const foundDocument = listData.documents.find(doc => doc.asset_id === uploadedAssetId);
+                    if (!foundDocument) {
+                        reject(new Error(\`Uploaded document with asset_id \${uploadedAssetId} not found in list\`));
+                        return;
+                    }
+                    
+                    log.info(\`✅ List documents successful - Found \${listData.documents.length} documents, including our uploaded document\`);
                     resolve();
                 } catch (error) {
                     reject(error);
@@ -741,23 +702,22 @@ const documentCrudBlueprint = async function () {
         });
         
         req.on('error', (error) => {
-            reject(new Error(\`Document list request failed: \${error.message}\`));
+            reject(new Error(\`List request failed: \${error.message}\`));
         });
         
-        req.setTimeout(10000, () => {
+        req.setTimeout(15000, () => {
             req.destroy();
-            reject(new Error('Document list request timed out'));
+            reject(new Error('List request timed out'));
         });
         
         req.end();
     });
     
-    // Test 2: Get specific document (Read operation) - using known pattern
-    log.info('Testing document get endpoint...');
+    // STEP 3: Get specific document by asset_id
+    log.info(\`STEP 3: Getting specific document with asset_id: \${uploadedAssetId}\`);
     
     await new Promise((resolve, reject) => {
-        const testAssetId = 'test-canary-asset-' + Date.now();
-        const getUrl = \`\${baseUrl}/\${testAssetId}?tenant_id=\${testTenantId}\`;
+        const getUrl = \`\${baseUrl}/\${uploadedAssetId}?tenant_id=\${testTenantId}\`;
         const parsedUrl = new URL(getUrl);
         
         const options = {
@@ -780,44 +740,36 @@ const documentCrudBlueprint = async function () {
             
             res.on('end', () => {
                 try {
-                    // For non-existent document, we expect 404 - this is valid behavior
-                    if (res.statusCode === 404) {
-                        let errorData;
-                        try {
-                            errorData = JSON.parse(responseBody);
-                        } catch (parseError) {
-                            reject(new Error(\`404 response is not valid JSON: \${parseError.message}\`));
-                            return;
-                        }
-                        
-                        if (errorData.error === 'Document not found') {
-                            log.info('Document get test passed - 404 response for non-existent document is correct');
-                            resolve();
-                            return;
-                        }
-                    }
-                    
-                    // If we get 200, validate the response structure
-                    if (res.statusCode === 200) {
-                        let getData;
-                        try {
-                            getData = JSON.parse(responseBody);
-                        } catch (parseError) {
-                            reject(new Error(\`Get response is not valid JSON: \${parseError.message}\`));
-                            return;
-                        }
-                        
-                        if (!getData.document) {
-                            reject(new Error('Get response missing document'));
-                            return;
-                        }
-                        
-                        log.info('Document get test passed - Found existing document');
-                        resolve();
+                    if (res.statusCode !== 200) {
+                        reject(new Error(\`Get document failed with status: \${res.statusCode} - \${responseBody}\`));
                         return;
                     }
                     
-                    reject(new Error(\`Document get returned unexpected status: \${res.statusCode} - \${responseBody}\`));
+                    let getData;
+                    try {
+                        getData = JSON.parse(responseBody);
+                    } catch (parseError) {
+                        reject(new Error(\`Get response is not valid JSON: \${parseError.message}\`));
+                        return;
+                    }
+                    
+                    if (!getData.document) {
+                        reject(new Error('Get response missing document'));
+                        return;
+                    }
+                    
+                    if (getData.document.asset_id !== uploadedAssetId) {
+                        reject(new Error(\`Asset ID mismatch: expected \${uploadedAssetId}, got \${getData.document.asset_id}\`));
+                        return;
+                    }
+                    
+                    if (getData.document.tenant_id !== testTenantId) {
+                        reject(new Error(\`Tenant ID mismatch in get: expected \${testTenantId}, got \${getData.document.tenant_id}\`));
+                        return;
+                    }
+                    
+                    log.info(\`✅ Get document successful - Retrieved document: \${getData.document.file_name}\`);
+                    resolve();
                 } catch (error) {
                     reject(error);
                 }
@@ -825,23 +777,22 @@ const documentCrudBlueprint = async function () {
         });
         
         req.on('error', (error) => {
-            reject(new Error(\`Document get request failed: \${error.message}\`));
+            reject(new Error(\`Get request failed: \${error.message}\`));
         });
         
-        req.setTimeout(10000, () => {
+        req.setTimeout(15000, () => {
             req.destroy();
-            reject(new Error('Document get request timed out'));
+            reject(new Error('Get request timed out'));
         });
         
         req.end();
     });
     
-    // Test 3: Delete endpoint structure test (Delete operation)
-    log.info('Testing document delete endpoint structure...');
+    // STEP 4: Delete the uploaded document (cleanup)
+    log.info(\`STEP 4: Deleting document with asset_id: \${uploadedAssetId}\`);
     
     await new Promise((resolve, reject) => {
-        const testAssetId = 'test-canary-delete-' + Date.now();
-        const deleteUrl = \`\${baseUrl}/\${testAssetId}?tenant_id=\${testTenantId}\`;
+        const deleteUrl = \`\${baseUrl}/\${uploadedAssetId}?tenant_id=\${testTenantId}\`;
         const parsedUrl = new URL(deleteUrl);
         
         const options = {
@@ -864,44 +815,31 @@ const documentCrudBlueprint = async function () {
             
             res.on('end', () => {
                 try {
-                    // For non-existent document, we expect 404 - this is valid behavior
-                    if (res.statusCode === 404) {
-                        let errorData;
-                        try {
-                            errorData = JSON.parse(responseBody);
-                        } catch (parseError) {
-                            reject(new Error(\`Delete 404 response is not valid JSON: \${parseError.message}\`));
-                            return;
-                        }
-                        
-                        if (errorData.error === 'Document not found') {
-                            log.info('Document delete test passed - 404 response for non-existent document is correct');
-                            resolve();
-                            return;
-                        }
-                    }
-                    
-                    // If we get 200, validate the response structure
-                    if (res.statusCode === 200) {
-                        let deleteData;
-                        try {
-                            deleteData = JSON.parse(responseBody);
-                        } catch (parseError) {
-                            reject(new Error(\`Delete response is not valid JSON: \${parseError.message}\`));
-                            return;
-                        }
-                        
-                        if (!deleteData.success) {
-                            reject(new Error('Delete response missing success field'));
-                            return;
-                        }
-                        
-                        log.info('Document delete test passed - Delete operation completed successfully');
-                        resolve();
+                    if (res.statusCode !== 200) {
+                        reject(new Error(\`Delete document failed with status: \${res.statusCode} - \${responseBody}\`));
                         return;
                     }
                     
-                    reject(new Error(\`Document delete returned unexpected status: \${res.statusCode} - \${responseBody}\`));
+                    let deleteData;
+                    try {
+                        deleteData = JSON.parse(responseBody);
+                    } catch (parseError) {
+                        reject(new Error(\`Delete response is not valid JSON: \${parseError.message}\`));
+                        return;
+                    }
+                    
+                    if (!deleteData.success) {
+                        reject(new Error('Delete response indicates failure'));
+                        return;
+                    }
+                    
+                    if (deleteData.document_id !== uploadedAssetId) {
+                        reject(new Error(\`Delete response document_id mismatch: expected \${uploadedAssetId}, got \${deleteData.document_id}\`));
+                        return;
+                    }
+                    
+                    log.info(\`✅ Delete successful - Document deleted: \${uploadedAssetId}\`);
+                    resolve();
                 } catch (error) {
                     reject(error);
                 }
@@ -909,22 +847,23 @@ const documentCrudBlueprint = async function () {
         });
         
         req.on('error', (error) => {
-            reject(new Error(\`Document delete request failed: \${error.message}\`));
+            reject(new Error(\`Delete request failed: \${error.message}\`));
         });
         
-        req.setTimeout(10000, () => {
+        req.setTimeout(15000, () => {
             req.destroy();
-            reject(new Error('Document delete request timed out'));
+            reject(new Error('Delete request timed out'));
         });
         
         req.end();
     });
     
-    log.info('All document CRUD tests completed successfully');
+    log.info('🎉 Complete document workflow test passed successfully!');
+    log.info('Workflow: Upload → List All → Get Specific → Delete');
 };
 
 exports.handler = async () => {
-    return await synthetics.executeStep('documentCrud', documentCrudBlueprint);
+    return await synthetics.executeStep('documentWorkflow', documentWorkflowBlueprint);
 };
         `),
         handler: 'index.handler',
@@ -936,7 +875,7 @@ exports.handler = async () => {
       role: canaryExecutionRole,
       artifactsBucketLocation: {
         bucket: canaryArtifactsBucket,
-        prefix: 'document-crud-canary',
+        prefix: 'document-workflow-canary',
       },
     });
 
@@ -959,14 +898,8 @@ exports.handler = async () => {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    new logs.LogGroup(this, 'DocumentUploadCanaryLogGroup', {
-      logGroupName: `/aws/lambda/cwsyn-${this.documentUploadCanary.canaryName}`,
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
-    new logs.LogGroup(this, 'DocumentCrudCanaryLogGroup', {
-      logGroupName: `/aws/lambda/cwsyn-${this.documentCrudCanary.canaryName}`,
+    new logs.LogGroup(this, 'DocumentWorkflowCanaryLogGroup', {
+      logGroupName: `/aws/lambda/cwsyn-${this.documentWorkflowCanary.canaryName}`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -992,14 +925,9 @@ exports.handler = async () => {
       description: 'Name of the database connection test canary',
     });
 
-    new cdk.CfnOutput(this, 'DocumentUploadCanaryName', {
-      value: this.documentUploadCanary.canaryName,
-      description: 'Name of the document upload test canary',
-    });
-
-    new cdk.CfnOutput(this, 'DocumentCrudCanaryName', {
-      value: this.documentCrudCanary.canaryName,
-      description: 'Name of the document CRUD test canary',
+    new cdk.CfnOutput(this, 'DocumentWorkflowCanaryName', {
+      value: this.documentWorkflowCanary.canaryName,
+      description: 'Name of the comprehensive document workflow test canary',
     });
   }
 }
