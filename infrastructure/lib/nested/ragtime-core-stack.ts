@@ -73,11 +73,18 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       allowAllOutbound: false,
     });
 
-    // Allow PostgreSQL access from Lambda functions in VPC
+    // Security group for Lambda functions
+    const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
+      vpc,
+      description: 'Security group for Lambda functions',
+      allowAllOutbound: true, // Allow all outbound for internet access
+    });
+
+    // Allow PostgreSQL access from Lambda security group
     databaseSecurityGroup.addIngressRule(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Peer.securityGroupId(lambdaSecurityGroup.securityGroupId),
       ec2.Port.tcp(5432),
-      'Allow PostgreSQL access from VPC'
+      'Allow PostgreSQL access from Lambda functions'
     );
 
     // Create DB subnet group for Aurora
@@ -131,6 +138,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
+      securityGroups: [lambdaSecurityGroup],
       environment: {
         DATABASE_CLUSTER_ENDPOINT: this.databaseCluster.clusterEndpoint.hostname,
         DATABASE_SECRET_NAME: this.databaseSecret.secretName,
@@ -171,10 +179,6 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       handler: migrationLambda,
       executeAfter: [this.databaseCluster, this.databaseSecret],
     });
-
-    // Add explicit dependency to ensure Aurora writer instance is ready
-    // This addresses the cluster vs instance readiness timing issue
-    this.databaseInitialization.node.addDependency(this.databaseCluster);
 
     // Outputs
     new cdk.CfnOutput(this, 'OpenAISecretName', {
