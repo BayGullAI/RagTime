@@ -954,7 +954,457 @@ async function verifyCorrelationTracking(
 }
 
 /**
- * Phase 5: Final cleanup - Remove all test artifacts
+ * Phase 5: Executive Report Generation (Phase 3 Implementation)
+ * Generates comprehensive executive report explaining end-to-end workflow
+ */
+async function executiveReportPhase(
+  logger: StructuredLogger,
+  dbClient: Client,
+  correlationId: string,
+  executedPhases: CanaryPhase[],
+  startTime: number
+): Promise<CanaryPhase> {
+  const phaseStartTime = Date.now();
+  const steps: CanaryStep[] = [];
+
+  logger.info('Starting executive report generation phase', {
+    correlationId,
+    operation: 'EXECUTIVE_REPORT_PHASE_START'
+  });
+
+  try {
+    // Step 1: Generate workflow explanation
+    const workflowExplanationStep = await generateWorkflowExplanation(logger, correlationId);
+    steps.push(workflowExplanationStep);
+
+    // Step 2: Analyze pipeline performance
+    const performanceAnalysisStep = await analyzePerformanceMetrics(logger, dbClient, correlationId, executedPhases);
+    steps.push(performanceAnalysisStep);
+
+    // Step 3: Generate executive summary
+    const executiveSummaryStep = await generateExecutiveSummary(logger, dbClient, correlationId, executedPhases, startTime);
+    steps.push(executiveSummaryStep);
+
+    const allPassed = steps.every(step => step.status === 'PASS');
+
+    return {
+      name: 'executive_report',
+      description: 'Generate comprehensive end-to-end workflow report and analysis',
+      status: allPassed ? 'PASS' : 'FAIL',
+      steps,
+      duration: Date.now() - phaseStartTime
+    };
+
+  } catch (error) {
+    logger.error('Executive report phase failed', {
+      correlationId,
+      operation: 'EXECUTIVE_REPORT_PHASE_ERROR',
+      error: error instanceof Error ? error.message : String(error)
+    });
+
+    return {
+      name: 'executive_report',
+      description: 'Generate comprehensive end-to-end workflow report and analysis',
+      status: 'FAIL',
+      steps,
+      duration: Date.now() - phaseStartTime,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+/**
+ * Generate detailed workflow explanation
+ */
+async function generateWorkflowExplanation(
+  logger: StructuredLogger,
+  correlationId: string
+): Promise<CanaryStep> {
+  const stepStartTime = Date.now();
+
+  try {
+    const workflowSteps = [
+      {
+        stage: 'Document Upload',
+        description: 'User uploads text/document files via API Gateway → Lambda function processes multipart form data → Stores in S3 with DynamoDB metadata tracking',
+        inputs: ['HTTP multipart form', 'Tenant ID', 'File content'],
+        outputs: ['S3 object', 'DynamoDB record', 'Correlation ID'],
+        duration: '~2-5 seconds',
+        criticalPath: ['File validation', 'S3 upload reliability', 'Metadata consistency']
+      },
+      {
+        stage: 'Text Processing & Chunking',
+        description: 'Lambda processes document content → Analyzes text structure → Creates optimized chunks for embedding generation',
+        inputs: ['S3 document', 'Correlation ID', 'Processing parameters'],
+        outputs: ['Text chunks (300-500 words)', 'Chunk metadata', 'Word count analytics'],
+        duration: '~3-8 seconds',
+        criticalPath: ['Content parsing accuracy', 'Chunk size optimization', 'Paragraph boundary detection']
+      },
+      {
+        stage: 'Embedding Generation',
+        description: 'OpenAI API integration → Generates 1536-dimensional vectors → Tracks token usage and costs',
+        inputs: ['Text chunks', 'OpenAI API key', 'Model parameters'],
+        outputs: ['Vector embeddings', 'Token metrics', 'API response data'],
+        duration: '~1-3 seconds per chunk',
+        criticalPath: ['API rate limits', 'Cost optimization', 'Error handling & retries']
+      },
+      {
+        stage: 'Vector Storage',
+        description: 'PostgreSQL with pgvector → Stores embeddings with metadata → Enables similarity search capabilities',
+        inputs: ['Vector embeddings', 'Chunk content', 'Document metadata'],
+        outputs: ['Searchable vector database', 'HNSW indexes', 'Query optimization'],
+        duration: '~0.5-2 seconds per vector',
+        criticalPath: ['Database connection pooling', 'Index performance', 'Transaction consistency']
+      }
+    ];
+
+    logger.info('Workflow explanation generated', {
+      correlationId,
+      operation: 'WORKFLOW_EXPLANATION_SUCCESS',
+      data: {
+        totalStages: workflowSteps.length,
+        estimatedTotalTime: '~15-30 seconds end-to-end',
+        dataFlow: 'HTTP → API Gateway → Lambda → S3/DynamoDB → Processing → OpenAI → PostgreSQL'
+      }
+    });
+
+    return {
+      name: 'workflow_explanation',
+      status: 'PASS',
+      details: 'End-to-end workflow explanation generated with 4 pipeline stages documented',
+      duration: Date.now() - stepStartTime,
+      metadata: {
+        stages: workflowSteps.length,
+        totalComponents: 8, // API Gateway, Lambda x4, S3, DynamoDB, OpenAI, PostgreSQL
+        estimatedEndToEndTime: '15-30 seconds'
+      }
+    };
+
+  } catch (error) {
+    return {
+      name: 'workflow_explanation',
+      status: 'FAIL',
+      error: error instanceof Error ? error.message : String(error),
+      duration: Date.now() - stepStartTime
+    };
+  }
+}
+
+/**
+ * Analyze performance metrics from executed phases
+ */
+async function analyzePerformanceMetrics(
+  logger: StructuredLogger,
+  dbClient: Client,
+  correlationId: string,
+  executedPhases: CanaryPhase[]
+): Promise<CanaryStep> {
+  const stepStartTime = Date.now();
+
+  try {
+    // Calculate phase-specific metrics
+    const phaseMetrics = executedPhases.map(phase => ({
+      name: phase.name,
+      duration: phase.duration || 0,
+      status: phase.status,
+      stepCount: phase.steps.length,
+      successRate: phase.steps.length > 0 ? (phase.steps.filter(s => s.status === 'PASS').length / phase.steps.length) * 100 : 0
+    }));
+
+    // Query database for additional metrics
+    const dbMetrics = await getDatabaseMetrics(dbClient, correlationId);
+
+    const performanceReport = {
+      phaseBreakdown: phaseMetrics,
+      databaseMetrics: dbMetrics,
+      overallMetrics: {
+        totalPhases: executedPhases.length,
+        successfulPhases: executedPhases.filter(p => p.status === 'PASS').length,
+        totalSteps: executedPhases.reduce((sum, p) => sum + p.steps.length, 0),
+        averagePhaseTime: phaseMetrics.reduce((sum, p) => sum + p.duration, 0) / phaseMetrics.length
+      }
+    };
+
+    logger.info('Performance analysis completed', {
+      correlationId,
+      operation: 'PERFORMANCE_ANALYSIS_SUCCESS',
+      data: performanceReport
+    });
+
+    return {
+      name: 'performance_analysis',
+      status: 'PASS',
+      details: `Performance metrics analyzed for ${executedPhases.length} phases with detailed timing breakdown`,
+      duration: Date.now() - stepStartTime,
+      metadata: performanceReport
+    };
+
+  } catch (error) {
+    logger.error('Performance analysis failed', {
+      correlationId,
+      operation: 'PERFORMANCE_ANALYSIS_ERROR',
+      error: error instanceof Error ? error.message : String(error)
+    });
+
+    return {
+      name: 'performance_analysis',
+      status: 'FAIL',
+      error: error instanceof Error ? error.message : String(error),
+      duration: Date.now() - stepStartTime
+    };
+  }
+}
+
+/**
+ * Generate executive summary report
+ */
+async function generateExecutiveSummary(
+  logger: StructuredLogger,
+  dbClient: Client,
+  correlationId: string,
+  executedPhases: CanaryPhase[],
+  startTime: number
+): Promise<CanaryStep> {
+  const stepStartTime = Date.now();
+
+  try {
+    const totalDuration = Date.now() - startTime;
+    const successfulPhases = executedPhases.filter(p => p.status === 'PASS').length;
+    const overallSuccessRate = (successfulPhases / executedPhases.length) * 100;
+
+    // Get additional context from database
+    const documentStats = await getDocumentProcessingStats(dbClient, correlationId);
+    
+    const executiveReport = formatExecutiveReport({
+      reportId: `EXEC-${correlationId}`,
+      timestamp: new Date().toISOString(),
+      executionDuration: totalDuration,
+      overallSuccessRate,
+      phaseCount: executedPhases.length,
+      documentStats,
+      phases: executedPhases,
+      recommendations: generateRecommendations(overallSuccessRate, totalDuration, executedPhases)
+    });
+
+    logger.info('Executive report generated', {
+      correlationId,
+      operation: 'EXECUTIVE_REPORT_SUCCESS',
+      data: {
+        reportLength: executiveReport.length,
+        successRate: overallSuccessRate,
+        totalDuration,
+        phaseCount: executedPhases.length
+      }
+    });
+
+    // Log the complete executive report
+    logger.info('EXECUTIVE_REPORT_CONTENT', {
+      correlationId,
+      operation: 'EXECUTIVE_REPORT_DISPLAY',
+      data: { report: executiveReport }
+    }, 'Complete Executive Pipeline Report Generated');
+
+    return {
+      name: 'executive_summary',
+      status: 'PASS',
+      details: `Executive report generated successfully with comprehensive analysis of ${executedPhases.length} phases`,
+      duration: Date.now() - stepStartTime,
+      metadata: {
+        reportId: `EXEC-${correlationId}`,
+        reportLength: executiveReport.length,
+        successRate: overallSuccessRate,
+        totalDuration
+      }
+    };
+
+  } catch (error) {
+    logger.error('Executive summary generation failed', {
+      correlationId,
+      operation: 'EXECUTIVE_SUMMARY_ERROR',
+      error: error instanceof Error ? error.message : String(error)
+    });
+
+    return {
+      name: 'executive_summary',
+      status: 'FAIL',
+      error: error instanceof Error ? error.message : String(error),
+      duration: Date.now() - stepStartTime
+    };
+  }
+}
+
+/**
+ * Get database metrics for reporting
+ */
+async function getDatabaseMetrics(dbClient: Client, correlationId: string): Promise<any> {
+  try {
+    const result = await dbClient.query(`
+      SELECT 
+        COUNT(DISTINCT d.id) as documents_processed,
+        COUNT(e.id) as embeddings_generated,
+        AVG(e.chunk_word_count) as avg_chunk_words,
+        COUNT(DISTINCT e.document_id) as documents_with_embeddings
+      FROM documents d
+      LEFT JOIN document_embeddings e ON d.id = e.document_id
+      WHERE d.correlation_id LIKE 'PIPELINE-%'
+    `);
+
+    return result.rows[0] || {};
+  } catch (error) {
+    return { error: 'Database metrics unavailable' };
+  }
+}
+
+/**
+ * Get document processing statistics
+ */
+async function getDocumentProcessingStats(dbClient: Client, correlationId: string): Promise<any> {
+  try {
+    const result = await dbClient.query(`
+      SELECT 
+        d.original_filename,
+        d.word_count,
+        d.source_url,
+        d.extraction_method,
+        COUNT(e.id) as chunk_count,
+        d.created_at
+      FROM documents d
+      LEFT JOIN document_embeddings e ON d.id = e.document_id
+      WHERE d.correlation_id LIKE 'PIPELINE-%'
+      GROUP BY d.id, d.original_filename, d.word_count, d.source_url, d.extraction_method, d.created_at
+      ORDER BY d.created_at DESC
+      LIMIT 10
+    `);
+
+    return result.rows || [];
+  } catch (error) {
+    return [];
+  }
+}
+
+/**
+ * Generate executive recommendations based on performance
+ */
+function generateRecommendations(successRate: number, duration: number, phases: CanaryPhase[]): string[] {
+  const recommendations: string[] = [];
+
+  if (successRate < 95) {
+    recommendations.push('🔴 CRITICAL: Pipeline success rate below 95% - investigate failed phases and implement additional error handling');
+  } else if (successRate < 100) {
+    recommendations.push('🟡 WARNING: Some pipeline failures detected - monitor error patterns and implement retry mechanisms');
+  }
+
+  if (duration > 60000) {
+    recommendations.push('⚡ PERFORMANCE: End-to-end processing exceeds 1 minute - consider parallelization and optimization');
+  }
+
+  const failedPhases = phases.filter(p => p.status === 'FAIL');
+  if (failedPhases.length > 0) {
+    recommendations.push(`🚨 FAILURES: ${failedPhases.length} phases failed - focus on: ${failedPhases.map(p => p.name).join(', ')}`);
+  }
+
+  if (recommendations.length === 0) {
+    recommendations.push('✅ EXCELLENT: Pipeline operating optimally with high success rate and good performance');
+    recommendations.push('🎯 CONTINUE: Maintain current monitoring and consider predictive alerting');
+  }
+
+  return recommendations;
+}
+
+/**
+ * Format executive report for display
+ */
+function formatExecutiveReport(reportData: {
+  reportId: string;
+  timestamp: string;
+  executionDuration: number;
+  overallSuccessRate: number;
+  phaseCount: number;
+  documentStats: any[];
+  phases: CanaryPhase[];
+  recommendations: string[];
+}): string {
+  return `
+================== RAGTIME PIPELINE EXECUTIVE REPORT ==================
+Report ID: ${reportData.reportId}
+Generated: ${reportData.timestamp}
+Execution Time: ${(reportData.executionDuration / 1000).toFixed(1)}s
+
+📊 PIPELINE OVERVIEW
+────────────────────────────────────────────────────────────────────────
+✅ Overall Success Rate: ${reportData.overallSuccessRate.toFixed(1)}%
+🔄 Phases Executed: ${reportData.phaseCount}
+📄 Documents Processed: ${reportData.documentStats.length}
+⏱️  Total Duration: ${(reportData.executionDuration / 1000).toFixed(1)}s
+
+🔄 END-TO-END WORKFLOW EXPLANATION
+────────────────────────────────────────────────────────────────────────
+1. DOCUMENT UPLOAD PHASE
+   📝 Process: HTTP multipart → API Gateway → Lambda validation → S3 storage
+   📥 Inputs: Form data, tenant ID, file content (up to 50MB)
+   📤 Outputs: S3 object, DynamoDB metadata, correlation ID for tracking
+   ⏱️  Typical Duration: 2-5 seconds
+   🔑 Critical Path: File validation, S3 reliability, metadata consistency
+
+2. TEXT PROCESSING & CHUNKING PHASE  
+   📝 Process: S3 trigger → Lambda processing → Content analysis → Smart chunking
+   📥 Inputs: Document content, correlation ID, processing parameters
+   📤 Outputs: Optimized text chunks (300-500 words), metadata, analytics
+   ⏱️  Typical Duration: 3-8 seconds  
+   🔑 Critical Path: Content parsing, chunk optimization, boundary detection
+
+3. EMBEDDING GENERATION PHASE
+   📝 Process: Chunk processing → OpenAI API calls → Vector generation → Cost tracking
+   📥 Inputs: Text chunks, API credentials, model parameters (text-embedding-ada-002)
+   📤 Outputs: 1536-dimensional vectors, token usage metrics, API response data
+   ⏱️  Typical Duration: 1-3 seconds per chunk
+   🔑 Critical Path: API rate limits, cost optimization, error handling & retries
+
+4. VECTOR STORAGE PHASE
+   📝 Process: Embedding ingestion → PostgreSQL/pgvector → Index optimization → Search setup
+   📥 Inputs: Vector embeddings, chunk content, document metadata
+   📤 Outputs: Searchable vector database, HNSW indexes, query capabilities
+   ⏱️  Typical Duration: 0.5-2 seconds per vector
+   🔑 Critical Path: DB connection pooling, index performance, transaction consistency
+
+📈 PHASE PERFORMANCE BREAKDOWN
+────────────────────────────────────────────────────────────────────────
+${reportData.phases.map(phase => 
+  `${phase.status === 'PASS' ? '✅' : '❌'} ${phase.name}: ${phase.status} (${((phase.duration || 0) / 1000).toFixed(1)}s, ${phase.steps.length} steps)`
+).join('\n')}
+
+📄 DOCUMENT PROCESSING DETAILS
+────────────────────────────────────────────────────────────────────────
+${reportData.documentStats.length > 0 ? reportData.documentStats.map(doc => 
+  `📄 ${doc.original_filename}: ${doc.chunk_count} chunks, ${doc.word_count} words, ${doc.extraction_method} method`
+).join('\n') : 'No document processing details available'}
+
+🎯 EXECUTIVE RECOMMENDATIONS
+────────────────────────────────────────────────────────────────────────
+${reportData.recommendations.join('\n')}
+
+🌊 DATA ARCHITECTURE FLOW
+────────────────────────────────────────────────────────────────────────
+HTTP Request → API Gateway → Document Upload Lambda
+     ↓
+Lambda → S3 Storage + DynamoDB Metadata (with correlation tracking)
+     ↓
+S3 Event → Text Processing Lambda → Intelligent Document Chunking
+     ↓  
+Chunks → Embedding Generation Service → OpenAI API Integration
+     ↓
+Embeddings → Vector Storage Service → PostgreSQL/pgvector Database
+     ↓
+Correlation ID enables complete end-to-end observability and tracing
+
+Generated by RagTime Pipeline Testing Canary (Phase 3 Implementation)
+Correlation ID: ${reportData.reportId}
+════════════════════════════════════════════════════════════════════════
+`;
+}
+
+/**
+ * Phase 6: Final cleanup - Remove all test artifacts
  */
 async function finalCleanupPhase(
   logger: StructuredLogger,
@@ -1088,7 +1538,11 @@ export const handler: Handler = async (event) => {
         phases.push(verificationResult);
       }
 
-      // Phase 5: Final cleanup (always run to clean up test data)
+      // Phase 5: Executive Report Generation (Phase 3 implementation)
+      const executiveReportResult = await executiveReportPhase(logger, dbClient, correlationId, phases, startTime);
+      phases.push(executiveReportResult);
+
+      // Phase 6: Final cleanup (always run to clean up test data)
       const finalCleanupResult = await finalCleanupPhase(logger, s3Client, dbClient, correlationId);
       phases.push(finalCleanupResult);
     }
