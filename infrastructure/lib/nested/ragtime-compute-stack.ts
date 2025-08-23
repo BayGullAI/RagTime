@@ -318,7 +318,11 @@ exports.handler = async (event, context) => {
         minify: true,
         sourceMap: false,
         target: 'es2020',
-        externalModules: ['aws-sdk', 'pg-native', 'pg']
+        externalModules: [
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+          'pg-native',
+          'pg'
+        ]
       }
     });
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
