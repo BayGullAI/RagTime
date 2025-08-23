@@ -92,7 +92,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     // Aurora PostgreSQL cluster with pgvector support
     this.databaseCluster = new rds.DatabaseCluster(this, 'VectorDatabase', {
       engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_15_3,
+        version: rds.AuroraPostgresEngineVersion.VER_15_8,
       }),
       credentials: rds.Credentials.fromSecret(this.databaseSecret),
       writer: rds.ClusterInstance.serverlessV2('writer', {
@@ -105,7 +105,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
       securityGroups: [databaseSecurityGroup],
-      defaultDatabaseName: 'ragtime',
+      defaultDatabaseName: 'ragtime', // Explicitly create the database
       storageEncrypted: true,
       monitoringInterval: cdk.Duration.minutes(1),
       serverlessV2MinCapacity: 0.5,
@@ -125,7 +125,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'handler',
       entry: path.join(__dirname, '../../lambda/database-migration/index.ts'),
-      timeout: cdk.Duration.minutes(5),
+      timeout: cdk.Duration.minutes(10),
       memorySize: 512,
       vpc: vpc,
       vpcSubnets: {
@@ -134,6 +134,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       environment: {
         DATABASE_CLUSTER_ENDPOINT: this.databaseCluster.clusterEndpoint.hostname,
         DATABASE_SECRET_NAME: this.databaseSecret.secretName,
+        DATABASE_NAME: 'ragtime',
       },
       bundling: {
         minify: false,
@@ -165,11 +166,15 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     // Grant Lambda access to read database secret
     this.databaseSecret.grantRead(migrationLambda);
 
-    // Create trigger to run migration Lambda after database is ready
+    // Create trigger to run migration Lambda after database cluster and instances are ready
     this.databaseInitialization = new triggers.Trigger(this, 'InitialSchemaMigration', {
       handler: migrationLambda,
-      executeAfter: [this.databaseCluster],
+      executeAfter: [this.databaseCluster, this.databaseSecret],
     });
+
+    // Add explicit dependency to ensure Aurora writer instance is ready
+    // This addresses the cluster vs instance readiness timing issue
+    this.databaseInitialization.node.addDependency(this.databaseCluster);
 
     // Outputs
     new cdk.CfnOutput(this, 'OpenAISecretName', {

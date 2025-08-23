@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS document_embeddings (
     document_id VARCHAR(255) NOT NULL,
     chunk_index INTEGER NOT NULL DEFAULT 0,
     content TEXT NOT NULL,
-    embedding VECTOR(1024) NOT NULL,
+    embedding VECTOR(1536) NOT NULL,
     metadata JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
