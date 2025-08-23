@@ -1,5 +1,4 @@
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import fetch from 'node-fetch';
 
 export interface EmbeddingResponse {
   embedding: number[];
