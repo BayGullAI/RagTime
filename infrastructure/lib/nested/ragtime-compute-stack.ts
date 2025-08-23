@@ -27,6 +27,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   public readonly healthCheckLambda: lambda.Function;
   public readonly vectorTestLambda: lambda.Function;
   public readonly textProcessingLambda: NodejsFunction;
+  public readonly documentUploadLambda: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
@@ -293,6 +294,37 @@ exports.handler = async (event, context) => {
     // Note: Database schema must be initialized separately before using text processing
     // This Lambda assumes pgvector extension and required tables already exist
 
+    // Document Upload Lambda Function (simplified, no text processing dependency)
+    this.documentUploadLambda = new NodejsFunction(this, 'DocumentUploadFunction', {
+      description: 'Document upload with basic processing',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'handler',
+      entry: path.join(__dirname, '../../../backend/src/lambdas/document-upload/index.ts'),
+      timeout: cdk.Duration.minutes(5), // Reduced from 15 minutes
+      memorySize: 1024, // Reduced from 2048MB
+      role: lambdaExecutionRole,
+      vpc: vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      environment: {
+        ENVIRONMENT: environment,
+        DOCUMENTS_TABLE_NAME: documentsTable.tableName,
+        DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+        // Remove text processing dependencies
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'es2020',
+        externalModules: [
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+          'pg-native',
+          'pg'
+        ]
+      }
+    });
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
       description: `RagTime REST API for ${environment} environment`,
@@ -368,6 +400,24 @@ exports.handler = async (event, context) => {
         },
       ],
     });
+    // Document upload endpoint
+    const documentsResource = this.api.root.addResource('documents');
+    const documentUploadIntegration = new apigateway.LambdaIntegration(this.documentUploadLambda, {
+      requestTemplates: { 'application/json': '{ "statusCode": "200" }' },
+    });
+
+    documentsResource.addMethod('POST', documentUploadIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
 
     // Text processing endpoint
     const processResource = this.api.root.addResource('process');
@@ -407,6 +457,11 @@ exports.handler = async (event, context) => {
     new cdk.CfnOutput(this, 'TextProcessingEndpoint', {
       value: `${this.api.url}process`,
       description: 'Text processing endpoint URL',
+    });
+
+    new cdk.CfnOutput(this, 'DocumentUploadEndpoint', {
+      value: `${this.api.url}documents`,
+      description: 'Document upload endpoint URL',
     });
   }
 }

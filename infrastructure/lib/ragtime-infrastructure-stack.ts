@@ -83,7 +83,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       ],
     });
 
-    // Nested Stack: Core Services (OpenAI Secrets Management)
+    // Nested Stack: Core Services (PostgreSQL Database and OpenAI Secrets Management)
     this.coreStack = new RagTimeCoreStack(this, 'CoreStack', {
       environment,
       vpc: this.vpc,
