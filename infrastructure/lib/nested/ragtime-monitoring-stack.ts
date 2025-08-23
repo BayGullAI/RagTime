@@ -216,7 +216,7 @@ const corsTestBlueprint = async function () {
         };
         
         const req = https.request(options, (res) => {
-            if (res.statusCode !== 200) {
+            if (res.statusCode !== 200 && res.statusCode !== 204) {
                 reject(new Error(\`CORS preflight failed with status: \${res.statusCode}\`));
                 return;
             }
