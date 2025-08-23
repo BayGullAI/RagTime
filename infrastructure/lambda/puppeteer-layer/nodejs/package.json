@@ -1,0 +1,13 @@
+{
+  "name": "puppeteer-layer",
+  "version": "1.0.0",
+  "description": "Puppeteer Lambda Layer for web content extraction",
+  "main": "index.js",
+  "dependencies": {
+    "puppeteer": "^21.11.0",
+    "puppeteer-core": "^21.11.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

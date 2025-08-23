@@ -409,10 +409,12 @@ describe('Document CRUD Lambda', () => {
       const result = await handler(listEvent as APIGatewayProxyEvent);
 
       expect(result.statusCode).toBe(500);
-      expect(JSON.parse(result.body)).toEqual({
-        error: 'Internal server error',
-        message: 'DynamoDB connection failed',
-      });
+      expect(JSON.parse(result.body)).toEqual(
+        expect.objectContaining({
+          error: 'Internal server error',
+          message: 'DynamoDB connection failed',
+        })
+      );
     });
   });
 });

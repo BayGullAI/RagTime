@@ -181,7 +181,7 @@ phases:
           # Deploy the CDK stack (includes all nested stacks automatically)
           # Note: Nested stacks are deployed automatically with the parent stack
           # Alternative: Use 'cdk deploy --all' to deploy all top-level stacks
-          cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose
+          cdk deploy RagTimeInfrastructure-$DEPLOYMENT_ENVIRONMENT --require-approval never --verbose -c importExistingSecret=true
           
         else
           echo "No CDK app found - deployment will be enabled when CDK app is added in issue #2"

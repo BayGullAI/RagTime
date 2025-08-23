@@ -27,7 +27,7 @@ interface DocumentMetadata {
   gsi2_sk: string; // For status-based queries: created_at#asset_id
 }
 
-interface ListDocumentsRequest {
+interface _ListDocumentsRequest {
   tenant_id: string;
   limit?: number;
   next_token?: string;
