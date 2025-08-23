@@ -434,25 +434,6 @@ exports.handler = async (event, context) => {
       ],
     });
 
-    // Document upload endpoint
-    const documentsResource = this.api.root.addResource('documents');
-    const documentUploadIntegration = new apigateway.LambdaIntegration(this.documentUploadLambda, {
-      requestTemplates: { 'application/json': '{ "statusCode": "200" }' },
-    });
-
-    documentsResource.addMethod('POST', documentUploadIntegration, {
-      methodResponses: [
-        {
-          statusCode: '200',
-          responseParameters: {
-            'method.response.header.Access-Control-Allow-Origin': true,
-            'method.response.header.Access-Control-Allow-Headers': true,
-            'method.response.header.Access-Control-Allow-Methods': true,
-          },
-        },
-      ],
-    });
-
     // Outputs (no exports to avoid conflicts with main stack)
     new cdk.CfnOutput(this, 'ApiGatewayUrl', {
       value: this.api.url,
