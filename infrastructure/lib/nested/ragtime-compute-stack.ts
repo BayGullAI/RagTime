@@ -139,8 +139,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'index.handler',
       code: lambda.Code.fromInline(`
-const AWS = require('aws-sdk');
-const secretsManager = new AWS.SecretsManager();
+const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 
 function createResponse(statusCode, body) {
   return {
@@ -157,7 +156,9 @@ function createResponse(statusCode, body) {
 
 async function getDatabaseCredentials() {
   const secretName = process.env.DATABASE_SECRET_NAME;
-  const result = await secretsManager.getSecretValue({ SecretId: secretName }).promise();
+  const client = new SecretsManagerClient({ region: process.env.AWS_REGION });
+  const command = new GetSecretValueCommand({ SecretId: secretName });
+  const result = await client.send(command);
   return JSON.parse(result.SecretString);
 }
 
