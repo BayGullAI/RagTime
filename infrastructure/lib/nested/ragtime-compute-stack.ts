@@ -280,18 +280,13 @@ exports.handler = async (event, context) => {
         DATABASE_NAME: 'ragtime',
       },
       bundling: {
-        minify: true,
-        sourceMap: false,
+        minify: false,
+        sourceMap: true,
         target: 'es2020',
         externalModules: [
-          'aws-sdk', // AWS SDK v2 is provided by the Lambda runtime
-          'pg-native', // PostgreSQL native bindings not needed in Lambda
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
         ],
-        nodeModules: [
-          'pg',
-          '@aws-sdk/client-secrets-manager'
-        ]
-        // Let esbuild bundle all other dependencies automatically
+        // Bundle pg and other dependencies - pg is not available in Lambda runtime
       }
     });
 
