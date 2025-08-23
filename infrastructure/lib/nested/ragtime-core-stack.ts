@@ -25,6 +25,8 @@ export class RagTimeCoreStack extends cdk.NestedStack {
   public readonly databaseCluster: rds.DatabaseCluster;
   public readonly databaseSecret: secretsmanager.Secret;
   public readonly databaseInitialization: triggers.Trigger;
+  public readonly databaseValidationFunctionName: string;
+  public readonly pipelineTestingFunctionName?: string;
 
   constructor(scope: Construct, id: string, props: RagTimeCoreStackProps) {
     super(scope, id, props);
@@ -281,6 +283,9 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       // });
       // pipelineCanaryRule.addTarget(new targets.LambdaFunction(pipelineTestingCanary));
 
+      // Set public property for pipeline testing function name
+      this.pipelineTestingFunctionName = pipelineTestingCanary.functionName;
+
       // Output pipeline canary function name
       new cdk.CfnOutput(this, 'PipelineTestingCanaryFunctionName', {
         value: pipelineTestingCanary.functionName,
@@ -303,6 +308,9 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       value: this.databaseSecret.secretName,
       description: 'Database credentials secret name',
     });
+
+    // Set public properties for function names
+    this.databaseValidationFunctionName = validationCanaryLambda.functionName;
 
     new cdk.CfnOutput(this, 'DatabaseValidationCanaryFunctionName', {
       value: validationCanaryLambda.functionName,
