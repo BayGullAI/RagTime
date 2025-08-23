@@ -308,7 +308,10 @@ async function validateMigrationsApplied(client: Client): Promise<CanaryCheck> {
     const appliedMigrations = result.rows;
     const requiredMigrations = ['001', '002']; // Initial schema + correlation tracking
     const appliedVersions = appliedMigrations.map(row => row.version);
-    const missingMigrations = requiredMigrations.filter(version => !appliedVersions.includes(version));
+    
+    // Handle both version formats: "001" or "001_initial_pgvector_schema"
+    const normalizedAppliedVersions = appliedVersions.map(v => v.split('_')[0]);
+    const missingMigrations = requiredMigrations.filter(version => !normalizedAppliedVersions.includes(version));
     
     if (missingMigrations.length > 0) {
       return {
