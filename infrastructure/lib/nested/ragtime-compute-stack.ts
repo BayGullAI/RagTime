@@ -314,7 +314,7 @@ exports.handler = async (event, context) => {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
-        // Remove text processing dependencies
+        TEXT_PROCESSING_LAMBDA_NAME: this.textProcessingLambda.functionName,
       },
       bundling: {
         minify: true,
@@ -391,6 +391,9 @@ exports.handler = async (event, context) => {
         // Bundle pg since it's needed for database connections
       }
     });
+
+    // Grant document upload Lambda permission to invoke text processing Lambda
+    this.textProcessingLambda.grantInvoke(lambdaExecutionRole);
 
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
