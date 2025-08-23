@@ -1,7 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { createResponse, createErrorResponse } from '../../utils/response.utils';
 
@@ -185,23 +185,30 @@ async function updateDocumentStatus(
   const now = new Date().toISOString();
   
   try {
-    const item: any = {
-      tenant_id: tenantId,
-      asset_id: assetId,
-      status: status,
-      updated_at: now,
-      gsi2_pk: `${tenantId}#${status}`,
-      gsi2_sk: `${now}#${assetId}`,
+    const updateParams: any = {
+      TableName: process.env.DOCUMENTS_TABLE_NAME!,
+      Key: {
+        tenant_id: tenantId,
+        asset_id: assetId,
+      },
+      UpdateExpression: 'SET #status = :status, updated_at = :updated_at, gsi2_pk = :gsi2_pk, gsi2_sk = :gsi2_sk',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+      },
+      ExpressionAttributeValues: {
+        ':status': status,
+        ':updated_at': now,
+        ':gsi2_pk': `${tenantId}#${status}`,
+        ':gsi2_sk': `${now}#${assetId}`,
+      },
     };
 
     if (errorMessage) {
-      item.error_message = errorMessage;
+      updateParams.UpdateExpression += ', error_message = :error_message';
+      updateParams.ExpressionAttributeValues[':error_message'] = errorMessage;
     }
 
-    await dynamoClient.send(new PutCommand({
-      TableName: process.env.DOCUMENTS_TABLE_NAME!,
-      Item: item,
-    }));
+    await dynamoClient.send(new UpdateCommand(updateParams));
   } catch (error) {
     console.error('Error updating document status:', error);
     throw new Error('Failed to update document status');
