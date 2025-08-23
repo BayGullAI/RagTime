@@ -217,20 +217,21 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     // Grant validation canary access to read database secret
     this.databaseSecret.grantRead(validationCanaryLambda);
 
+    // TODO: Re-enable after deployment issues are resolved
     // Create EventBridge rule to run validation canary every 15 minutes
-    const validationCanaryRule = new events.Rule(this, 'DatabaseValidationCanarySchedule', {
-      description: 'Run database validation canary every 15 minutes to verify correlation tracking',
-      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
-    });
+    // const validationCanaryRule = new events.Rule(this, 'DatabaseValidationCanarySchedule', {
+    //   description: 'Run database validation canary every 15 minutes to verify correlation tracking',
+    //   schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+    // });
 
     // Add the validation canary Lambda as target
-    validationCanaryRule.addTarget(new targets.LambdaFunction(validationCanaryLambda));
+    // validationCanaryRule.addTarget(new targets.LambdaFunction(validationCanaryLambda));
 
     // Also create a trigger to run validation canary once after migrations complete
-    const initialValidationTrigger = new triggers.Trigger(this, 'InitialValidationTrigger', {
-      handler: validationCanaryLambda,
-      executeAfter: [this.databaseInitialization], // Run after migrations complete
-    });
+    // const initialValidationTrigger = new triggers.Trigger(this, 'InitialValidationTrigger', {
+    //   handler: validationCanaryLambda,
+    //   executeAfter: [this.databaseInitialization], // Run after migrations complete
+    // });
 
     // Outputs
     new cdk.CfnOutput(this, 'OpenAISecretName', {
