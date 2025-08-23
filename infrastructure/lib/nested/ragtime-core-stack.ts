@@ -27,31 +27,39 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     const { environment, vpc } = props;
 
     // OpenAI API Key Secret
-    // Check if OpenAI API key is provided via environment variable
-    const openaiApiKey = process.env.OPENAI_API_KEY;
+    const openaiSecretName = `ragtime-openai-api-key-${environment}`;
+    const importExistingSecret = this.node.tryGetContext('importExistingSecret');
     
-    if (openaiApiKey) {
-      // If API key is provided, create secret with the actual key
-      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecretWithKey', {
-        secretName: `ragtime-openai-api-key-${environment}`,
-        description: 'OpenAI API key for embedding generation',
-        secretObjectValue: {
-          api_key: cdk.SecretValue.unsafePlainText(openaiApiKey),
-        },
-        // Use default AWS managed encryption to avoid cross-stack dependencies
-      });
+    if (importExistingSecret) {
+      // Import existing secret instead of creating new one
+      this.openAISecret = secretsmanager.Secret.fromSecretNameV2(this, 'ImportedOpenAISecret', openaiSecretName) as secretsmanager.Secret;
     } else {
-      // If no API key provided, create secret with placeholder for manual setup
-      this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecretPlaceholder', {
-        secretName: `ragtime-openai-api-key-${environment}`,
-        description: 'OpenAI API key for embedding generation (set manually)',
-        generateSecretString: {
-          secretStringTemplate: JSON.stringify({ api_key: 'REPLACE_WITH_ACTUAL_OPENAI_API_KEY' }),
-          generateStringKey: 'api_key',
-          excludeCharacters: '"@/\\\'',
-        },
-        // Use default AWS managed encryption to avoid cross-stack dependencies
-      });
+      // Check if OpenAI API key is provided via environment variable
+      const openaiApiKey = process.env.OPENAI_API_KEY;
+      
+      if (openaiApiKey) {
+        // If API key is provided, create secret with the actual key
+        this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecretWithKey', {
+          secretName: openaiSecretName,
+          description: 'OpenAI API key for embedding generation',
+          secretObjectValue: {
+            api_key: cdk.SecretValue.unsafePlainText(openaiApiKey),
+          },
+          // Use default AWS managed encryption to avoid cross-stack dependencies
+        });
+      } else {
+        // If no API key provided, create secret with placeholder for manual setup
+        this.openAISecret = new secretsmanager.Secret(this, 'OpenAISecretPlaceholder', {
+          secretName: openaiSecretName,
+          description: 'OpenAI API key for embedding generation (set manually)',
+          generateSecretString: {
+            secretStringTemplate: JSON.stringify({ api_key: 'REPLACE_WITH_ACTUAL_OPENAI_API_KEY' }),
+            generateStringKey: 'api_key',
+            excludeCharacters: '"@/\\\'',
+          },
+          // Use default AWS managed encryption to avoid cross-stack dependencies
+        });
+      }
     }
 
     // Aurora PostgreSQL Database Secret

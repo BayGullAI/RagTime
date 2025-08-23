@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -25,6 +26,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   public readonly api: apigateway.RestApi;
   public readonly healthCheckLambda: lambda.Function;
   public readonly vectorTestLambda: lambda.Function;
+  public readonly textProcessingLambda: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
@@ -254,6 +256,43 @@ exports.handler = async (event, context) => {
       },
     });
 
+    // Text Processing Lambda Function with automatic bundling
+    this.textProcessingLambda = new NodejsFunction(this, 'TextProcessingFunction', {
+      description: 'Text chunking and embedding generation for documents',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'handler',
+      entry: path.join(__dirname, '../../../backend/src/lambdas/text-processing/index.ts'),
+      timeout: cdk.Duration.minutes(5), // Longer timeout for processing
+      memorySize: 1024, // More memory for text processing
+      role: lambdaExecutionRole,
+      vpc: vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      environment: {
+        ENVIRONMENT: environment,
+        DOCUMENTS_TABLE_NAME: documentsTable.tableName,
+        DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+        OPENAI_SECRET_NAME: openAISecret.secretName,
+        DATABASE_SECRET_NAME: databaseSecret.secretName,
+        DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
+        DATABASE_NAME: 'ragtime',
+      },
+      bundling: {
+        minify: false,
+        sourceMap: true,
+        target: 'es2020',
+        externalModules: [
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+        ],
+        // Bundle pg and other dependencies - pg is not available in Lambda runtime
+      }
+    });
+
+    // Note: Database schema must be initialized separately before using text processing
+    // This Lambda assumes pgvector extension and required tables already exist
+
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
       description: `RagTime REST API for ${environment} environment`,
@@ -330,6 +369,25 @@ exports.handler = async (event, context) => {
       ],
     });
 
+    // Text processing endpoint
+    const processResource = this.api.root.addResource('process');
+    const textProcessingIntegration = new apigateway.LambdaIntegration(this.textProcessingLambda, {
+      requestTemplates: { 'application/json': '{ "statusCode": "200" }' },
+    });
+
+    processResource.addMethod('POST', textProcessingIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
     // Outputs (no exports to avoid conflicts with main stack)
     new cdk.CfnOutput(this, 'ApiGatewayUrl', {
       value: this.api.url,
@@ -344,6 +402,11 @@ exports.handler = async (event, context) => {
     new cdk.CfnOutput(this, 'DatabaseTestEndpoint', {
       value: `${this.api.url}database-test`,
       description: 'Database connection test endpoint URL',
+    });
+
+    new cdk.CfnOutput(this, 'TextProcessingEndpoint', {
+      value: `${this.api.url}process`,
+      description: 'Text processing endpoint URL',
     });
   }
 }
