@@ -309,11 +309,11 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     `);
     console.log('Created tables:', tableCheck.rows.map(row => row.table_name));
     
+    // Get final migration state for reporting before closing connection
+    const finalAppliedMigrations = await getAppliedMigrations(client);
+    
     await client.end();
     console.log('Database connection closed');
-    
-    // Get final migration state for reporting
-    const finalAppliedMigrations = await getAppliedMigrations(client);
     
     // Send success response to CloudFormation
     await sendResponse(event, 'SUCCESS', {
