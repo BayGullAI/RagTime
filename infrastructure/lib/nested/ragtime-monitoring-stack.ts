@@ -13,6 +13,7 @@ export interface RagTimeMonitoringStackProps extends cdk.NestedStackProps {
 export class RagTimeMonitoringStack extends cdk.NestedStack {
   public readonly healthCheckCanary: synthetics.Canary;
   public readonly corsTestCanary: synthetics.Canary;
+  public readonly databaseTestCanary: synthetics.Canary;
 
   constructor(scope: Construct, id: string, props: RagTimeMonitoringStackProps) {
     super(scope, id, props);
@@ -360,6 +361,161 @@ exports.handler = async () => {
       },
     });
 
+    // Database Connection Test Canary
+    this.databaseTestCanary = new synthetics.Canary(this, 'DatabaseTestCanary', {
+      canaryName: `ragtime-database-${environment}`,
+      schedule: synthetics.Schedule.rate(cdk.Duration.minutes(15)),
+      test: synthetics.Test.custom({
+        code: synthetics.Code.fromInline(`
+const synthetics = require('Synthetics');
+const log = require('SyntheticsLogger');
+const https = require('https');
+const { URL } = require('url');
+
+const databaseTestBlueprint = async function () {
+    const databaseTestUrl = '${apiGatewayUrl}database-test';
+    log.info('Starting database connection test for: ' + databaseTestUrl);
+    
+    return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        
+        try {
+            const parsedUrl = new URL(databaseTestUrl);
+            
+            const options = {
+                hostname: parsedUrl.hostname,
+                port: parsedUrl.port || 443,
+                path: parsedUrl.pathname,
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'AWS-Synthetics-Canary',
+                    'Content-Type': 'application/json'
+                }
+            };
+            
+            const req = https.request(options, (res) => {
+                let responseBody = '';
+                
+                res.on('data', (chunk) => {
+                    responseBody += chunk;
+                });
+                
+                res.on('end', () => {
+                    const responseTime = Date.now() - startTime;
+                    
+                    try {
+                        // Check status code
+                        if (res.statusCode !== 200) {
+                            reject(new Error(\`Database test failed with status: \${res.statusCode} - \${responseBody}\`));
+                            return;
+                        }
+                        
+                        // Parse JSON response
+                        let databaseData;
+                        try {
+                            databaseData = JSON.parse(responseBody);
+                        } catch (parseError) {
+                            reject(new Error(\`Database test response is not valid JSON: \${parseError.message}\`));
+                            return;
+                        }
+                        
+                        // Validate database connection response
+                        if (!databaseData.message) {
+                            reject(new Error('Database test response missing message'));
+                            return;
+                        }
+                        
+                        if (!databaseData.endpoint) {
+                            reject(new Error('Database test response missing endpoint'));
+                            return;
+                        }
+                        
+                        if (!databaseData.database) {
+                            reject(new Error('Database test response missing database name'));
+                            return;
+                        }
+                        
+                        if (!databaseData.username) {
+                            reject(new Error('Database test response missing username'));
+                            return;
+                        }
+                        
+                        if (databaseData.status !== 'ready') {
+                            reject(new Error(\`Database status is not ready: \${databaseData.status}\`));
+                            return;
+                        }
+                        
+                        if (!databaseData.timestamp) {
+                            reject(new Error('Database test response missing timestamp'));
+                            return;
+                        }
+                        
+                        // Verify response time (database connections can be slower)
+                        if (responseTime > 15000) {
+                            reject(new Error(\`Database test response time too slow: \${responseTime}ms\`));
+                            return;
+                        }
+                        
+                        // Validate database endpoint format
+                        if (!databaseData.endpoint.includes('cluster-') || !databaseData.endpoint.includes('rds.amazonaws.com')) {
+                            reject(new Error(\`Invalid database endpoint format: \${databaseData.endpoint}\`));
+                            return;
+                        }
+                        
+                        // Validate database name
+                        if (databaseData.database !== 'ragtime') {
+                            reject(new Error(\`Unexpected database name: \${databaseData.database}\`));
+                            return;
+                        }
+                        
+                        // Validate username format
+                        if (!databaseData.username || databaseData.username.length < 3) {
+                            reject(new Error(\`Invalid database username: \${databaseData.username}\`));
+                            return;
+                        }
+                        
+                        log.info(\`Database connection test passed - Database: \${databaseData.database}, User: \${databaseData.username}, Response time: \${responseTime}ms\`);
+                        log.info(\`Database endpoint: \${databaseData.endpoint}\`);
+                        resolve();
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            });
+            
+            req.on('error', (error) => {
+                reject(new Error(\`Database test request failed: \${error.message}\`));
+            });
+            
+            req.setTimeout(20000, () => {
+                req.destroy();
+                reject(new Error('Database test request timed out'));
+            });
+            
+            req.end();
+        } catch (error) {
+            reject(new Error(\`Database test failed: \${error.message}\`));
+        }
+    });
+};
+
+exports.handler = async () => {
+    return await synthetics.executeStep('databaseTest', databaseTestBlueprint);
+};
+        `),
+        handler: 'index.handler',
+      }),
+      runtime: new synthetics.Runtime('syn-nodejs-puppeteer-10.0', synthetics.RuntimeFamily.NODEJS),
+      environmentVariables: {
+        API_URL: apiGatewayUrl,
+      },
+      role: canaryExecutionRole,
+      artifactsBucketLocation: {
+        bucket: canaryArtifactsBucket,
+        prefix: 'database-test-canary',
+      },
+    });
+
     // CloudWatch Log Groups for canaries (with retention)
     new logs.LogGroup(this, 'HealthCheckCanaryLogGroup', {
       logGroupName: `/aws/lambda/cwsyn-${this.healthCheckCanary.canaryName}`,
@@ -369,6 +525,12 @@ exports.handler = async () => {
 
     new logs.LogGroup(this, 'CorsTestCanaryLogGroup', {
       logGroupName: `/aws/lambda/cwsyn-${this.corsTestCanary.canaryName}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new logs.LogGroup(this, 'DatabaseTestCanaryLogGroup', {
+      logGroupName: `/aws/lambda/cwsyn-${this.databaseTestCanary.canaryName}`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -387,6 +549,11 @@ exports.handler = async () => {
     new cdk.CfnOutput(this, 'CorsTestCanaryName', {
       value: this.corsTestCanary.canaryName,
       description: 'Name of the CORS test canary',
+    });
+
+    new cdk.CfnOutput(this, 'DatabaseTestCanaryName', {
+      value: this.databaseTestCanary.canaryName,
+      description: 'Name of the database connection test canary',
     });
   }
 }
