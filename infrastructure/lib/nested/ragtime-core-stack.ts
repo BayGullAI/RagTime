@@ -149,11 +149,9 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         sourceMap: true,
         target: 'es2020',
         externalModules: [
-          'aws-sdk', // AWS SDK v2 is provided by the Lambda runtime  
-        ],
-        nodeModules: [
-          'pg',
-          '@aws-sdk/client-secrets-manager'
+          'aws-sdk', // AWS SDK v2 is provided by the Lambda runtime
+          '@aws-sdk/*', // AWS SDK v3 modules
+          'pg' // PostgreSQL client
         ],
         commandHooks: {
           beforeBundling: (inputDir: string, outputDir: string): string[] => {
