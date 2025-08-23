@@ -1,6 +1,7 @@
 import { Handler } from 'aws-lambda';
 import { Client } from 'pg';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -129,12 +130,12 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
         console.log('Database connection verified');
         break;
         
-      } catch (connError) {
+      } catch (connError: any) {
         connectionAttempts++;
         console.warn(`Connection attempt ${connectionAttempts}/${maxAttempts} failed:`, connError);
         
         if (connectionAttempts >= maxAttempts) {
-          throw new Error(`Failed to connect to database after ${maxAttempts} attempts: ${connError.message}`);
+          throw new Error(`Failed to connect to database after ${maxAttempts} attempts: ${connError?.message || String(connError)}`);
         }
         
         // Longer wait for Aurora Serverless V2 scale-up (up to 30 seconds for first connection)
@@ -159,12 +160,126 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     }
     console.log('pgvector extension is available');
 
-    // Read migration SQL from file
-    const migrationSQL = fs.readFileSync(
-      path.join(__dirname, '001_initial_pgvector_schema.sql'),
-      'utf8'
-    );
-    console.log('Migration SQL loaded, length:', migrationSQL.length);
+    // Download migration SQL from S3 with fallback to embedded SQL
+    let migrationSQL: string;
+    
+    try {
+      console.log('Downloading SQL file from S3...');
+      
+      // Initialize S3 client
+      const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+      
+      // Download SQL file from S3
+      const response = await s3Client.send(new GetObjectCommand({
+        Bucket: process.env.SQL_ASSET_BUCKET,
+        Key: process.env.SQL_ASSET_KEY,
+      }));
+      
+      if (!response.Body) {
+        throw new Error('No SQL file content received from S3');
+      }
+      
+      migrationSQL = await response.Body.transformToString();
+      console.log('Migration SQL downloaded successfully from S3, length:', migrationSQL.length);
+      
+    } catch (s3Error) {
+      console.error('Failed to download migration SQL file from S3:', s3Error);
+      
+      // Fallback: embedded SQL as string (as backup solution)
+      console.log('Using embedded SQL as fallback...');
+      migrationSQL = `
+-- Migration: 001_initial_pgvector_schema (embedded)
+-- Description: Create pgvector extension and initial schema for vector embeddings
+
+-- Enable pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Create document_embeddings table for storing vector embeddings
+CREATE TABLE IF NOT EXISTS document_embeddings (
+    id SERIAL PRIMARY KEY,
+    document_id VARCHAR(255) NOT NULL,
+    chunk_index INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL,
+    embedding VECTOR(1536) NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for efficient vector similarity search
+-- IVFFlat index for cosine similarity search (good for most use cases)
+CREATE INDEX IF NOT EXISTS document_embeddings_embedding_cosine_idx 
+    ON document_embeddings USING ivfflat (embedding vector_cosine_ops) 
+    WITH (lists = 100);
+
+-- Index for filtering by document_id
+CREATE INDEX IF NOT EXISTS document_embeddings_document_id_idx 
+    ON document_embeddings (document_id);
+
+-- Index for filtering by document_id and chunk_index
+CREATE INDEX IF NOT EXISTS document_embeddings_document_chunk_idx 
+    ON document_embeddings (document_id, chunk_index);
+
+-- Index for created_at for time-based queries
+CREATE INDEX IF NOT EXISTS document_embeddings_created_at_idx 
+    ON document_embeddings (created_at);
+
+-- Create documents table for document metadata
+CREATE TABLE IF NOT EXISTS documents (
+    id VARCHAR(255) PRIMARY KEY,
+    original_filename VARCHAR(512) NOT NULL,
+    content_type VARCHAR(100),
+    file_size INTEGER,
+    total_chunks INTEGER DEFAULT 0,
+    status VARCHAR(50) DEFAULT 'processing',
+    error_message TEXT,
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Index for status filtering
+CREATE INDEX IF NOT EXISTS documents_status_idx ON documents (status);
+
+-- Index for created_at
+CREATE INDEX IF NOT EXISTS documents_created_at_idx ON documents (created_at);
+
+-- Create migration tracking table
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version VARCHAR(255) PRIMARY KEY,
+    applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    description TEXT
+);
+
+-- Record this migration
+INSERT INTO schema_migrations (version, description) 
+VALUES ('001_initial_pgvector_schema', 'Create pgvector extension and initial schema for vector embeddings')
+ON CONFLICT (version) DO NOTHING;
+
+-- Create function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+-- Create triggers to automatically update updated_at
+DROP TRIGGER IF EXISTS update_document_embeddings_updated_at ON document_embeddings;
+CREATE TRIGGER update_document_embeddings_updated_at
+    BEFORE UPDATE ON document_embeddings
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_documents_updated_at ON documents;
+CREATE TRIGGER update_documents_updated_at
+    BEFORE UPDATE ON documents
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+      `;
+      console.log('Fallback SQL embedded, length:', migrationSQL.length);
+    }
     
     // Execute migration SQL
     console.log('Executing database migration...');
@@ -180,6 +295,31 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     `);
     console.log('Created tables:', tableCheck.rows.map(row => row.table_name));
     
+    // Verify pgvector extension is installed
+    const extensionVerify = await client.query(`
+      SELECT name, default_version, installed_version
+      FROM pg_available_extensions 
+      WHERE name = 'vector'
+    `);
+    console.log('pgvector extension status:', extensionVerify.rows);
+    
+    // Verify specific table structures
+    const embeddingsTableCheck = await client.query(`
+      SELECT column_name, data_type
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' 
+      AND table_name = 'document_embeddings'
+    `);
+    console.log('document_embeddings table columns:', embeddingsTableCheck.rows.length);
+    
+    // Check migration tracking
+    const migrationCheck = await client.query(`
+      SELECT version, applied_at, description
+      FROM schema_migrations 
+      WHERE version = '001_initial_pgvector_schema'
+    `);
+    console.log('Migration tracking:', migrationCheck.rows);
+    
     await client.end();
     console.log('Database connection closed');
     
@@ -187,7 +327,11 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     await sendResponse(event, 'SUCCESS', {
       message: 'Database schema initialized successfully',
       tablesCreated: tableCheck.rows.map(row => row.table_name),
-      migrationVersion: '001_initial_pgvector_schema'
+      migrationVersion: '001_initial_pgvector_schema',
+      pgvectorExtension: extensionVerify.rows[0] || null,
+      embeddingsTableColumns: embeddingsTableCheck.rows.length,
+      migrationTracking: migrationCheck.rows[0] || null,
+      sqlSource: migrationSQL.includes('embedded') ? 'embedded' : 's3'
     });
     
   } catch (error) {
