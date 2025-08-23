@@ -5,7 +5,7 @@
     "lib": [
       "es2020"
     ],
-    "types": ["node"],
+    "types": ["node", "jest"],
     "declaration": true,
     "strict": true,
     "noImplicitAny": true,
@@ -32,6 +32,7 @@
   "exclude": [
     "node_modules",
     "cdk.out",
-    "dist"
+    "dist",
+    "**/*.test.ts"
   ]
 }

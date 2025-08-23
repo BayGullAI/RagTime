@@ -28,6 +28,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   public readonly vectorTestLambda: lambda.Function;
   public readonly textProcessingLambda: NodejsFunction;
   public readonly documentUploadLambda: NodejsFunction;
+  public readonly documentCrudLambda: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
@@ -325,6 +326,38 @@ exports.handler = async (event, context) => {
         ]
       }
     });
+
+    // Document CRUD Lambda Function
+    this.documentCrudLambda = new NodejsFunction(this, 'DocumentCrudFunction', {
+      description: 'Document CRUD operations (list, get, delete)',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'handler',
+      entry: path.join(__dirname, '../../../backend/src/lambdas/document-crud/index.ts'),
+      timeout: cdk.Duration.minutes(2),
+      memorySize: 512,
+      role: lambdaExecutionRole,
+      vpc: vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      environment: {
+        ENVIRONMENT: environment,
+        DOCUMENTS_TABLE_NAME: documentsTable.tableName,
+        DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'es2020',
+        externalModules: [
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+          'pg-native',
+          'pg'
+        ]
+      }
+    });
+
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
       description: `RagTime REST API for ${environment} environment`,
@@ -419,6 +452,55 @@ exports.handler = async (event, context) => {
       ],
     });
 
+    // Document CRUD endpoints
+    const documentCrudIntegration = new apigateway.LambdaIntegration(this.documentCrudLambda, {
+      proxy: true,
+    });
+
+    // GET /documents - List all documents
+    documentsResource.addMethod('GET', documentCrudIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
+    // GET /documents/{asset_id} - Get specific document
+    // DELETE /documents/{asset_id} - Delete document
+    const documentDetailResource = documentsResource.addResource('{asset_id}');
+    
+    documentDetailResource.addMethod('GET', documentCrudIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
+    documentDetailResource.addMethod('DELETE', documentCrudIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
     // Text processing endpoint
     const processResource = this.api.root.addResource('process');
     const textProcessingIntegration = new apigateway.LambdaIntegration(this.textProcessingLambda, {
@@ -461,7 +543,17 @@ exports.handler = async (event, context) => {
 
     new cdk.CfnOutput(this, 'DocumentUploadEndpoint', {
       value: `${this.api.url}documents`,
-      description: 'Document upload endpoint URL',
+      description: 'Document upload endpoint URL (POST)',
+    });
+
+    new cdk.CfnOutput(this, 'DocumentListEndpoint', {
+      value: `${this.api.url}documents`,
+      description: 'Document list endpoint URL (GET)',
+    });
+
+    new cdk.CfnOutput(this, 'DocumentCrudEndpoint', {
+      value: `${this.api.url}documents/{asset_id}`,
+      description: 'Document CRUD endpoint URL (GET/DELETE)',
     });
   }
 }
