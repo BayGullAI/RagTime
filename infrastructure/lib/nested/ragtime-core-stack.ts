@@ -4,7 +4,9 @@ import * as rds from 'aws-cdk-lib/aws-rds';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as triggers from 'aws-cdk-lib/triggers';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -17,6 +19,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
   public readonly openAISecret: secretsmanager.Secret;
   public readonly databaseCluster: rds.DatabaseCluster;
   public readonly databaseSecret: secretsmanager.Secret;
+  public readonly databaseInitialization: triggers.Trigger;
 
   constructor(scope: Construct, id: string, props: RagTimeCoreStackProps) {
     super(scope, id, props);
@@ -116,27 +119,57 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
 
-    // Note: pgvector extension will be enabled manually or via migration scripts
-    // Aurora PostgreSQL 15.4+ includes pgvector extension, but it needs to be enabled per database
-    // 
-    // Database schema will include:
-    // - documents table with vector column for 1024-dimensional embeddings
-    // - metadata tables for document management
-    // - indexes for efficient vector similarity search
-    //
-    // Example SQL to be run via migration scripts:
-    // CREATE EXTENSION IF NOT EXISTS vector;
-    // CREATE TABLE documents (
-    //   id SERIAL PRIMARY KEY,
-    //   content TEXT NOT NULL,
-    //   embedding vector(1024),
-    //   metadata JSONB,
-    //   created_at TIMESTAMP DEFAULT NOW()
-    // );
-    // CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    // Create Lambda function to initialize database schema
+    const migrationLambda = new NodejsFunction(this, 'DatabaseMigrationFunction', {
+      description: 'Initialize database schema with pgvector extension and tables',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'handler',
+      entry: path.join(__dirname, '../../lambda/database-migration/index.ts'),
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 512,
+      vpc: vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      environment: {
+        DATABASE_CLUSTER_ENDPOINT: this.databaseCluster.clusterEndpoint.hostname,
+        DATABASE_SECRET_NAME: this.databaseSecret.secretName,
+      },
+      bundling: {
+        minify: false,
+        sourceMap: true,
+        target: 'es2020',
+        externalModules: [
+          'aws-sdk', // AWS SDK v2 is provided by the Lambda runtime  
+        ],
+        nodeModules: [
+          'pg',
+          '@aws-sdk/client-secrets-manager'
+        ],
+        commandHooks: {
+          beforeBundling: (inputDir: string, outputDir: string): string[] => {
+            return [];
+          },
+          afterBundling: (inputDir: string, outputDir: string): string[] => {
+            return [
+              `cp ${inputDir}/infrastructure/lambda/database-migration/001_initial_pgvector_schema.sql ${outputDir}/001_initial_pgvector_schema.sql`
+            ];
+          },
+          beforeInstall: (inputDir: string, outputDir: string): string[] => {
+            return [];
+          },
+        },
+      },
+    });
 
-    // Note: Database migrations will be handled manually or via separate deployment
-    // The Aurora cluster is ready for pgvector extension and schema creation
+    // Grant Lambda access to read database secret
+    this.databaseSecret.grantRead(migrationLambda);
+
+    // Create trigger to run migration Lambda after database is ready
+    this.databaseInitialization = new triggers.Trigger(this, 'InitialSchemaMigration', {
+      handler: migrationLambda,
+      executeAfter: [this.databaseCluster],
+    });
 
     // Outputs
     new cdk.CfnOutput(this, 'OpenAISecretName', {
