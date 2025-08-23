@@ -1256,22 +1256,32 @@ async function getDatabaseMetrics(dbClient: Client, correlationId: string): Prom
 }
 
 /**
- * Get document processing statistics
+ * Get detailed document processing statistics with chunk and embedding analysis
  */
 async function getDocumentProcessingStats(dbClient: Client, correlationId: string): Promise<any> {
   try {
+    // Get detailed document processing stats including chunk and embedding counts
     const result = await dbClient.query(`
       SELECT 
+        d.id as document_id,
         d.original_filename,
         d.word_count,
+        d.character_count,
         d.source_url,
         d.extraction_method,
-        COUNT(e.id) as chunk_count,
-        d.created_at
+        d.file_size,
+        d.status,
+        d.created_at,
+        COUNT(DISTINCT e.id) as embeddings_created,
+        COUNT(DISTINCT CASE WHEN e.id IS NOT NULL THEN e.id END) as embeddings_stored,
+        AVG(e.chunk_word_count) as avg_chunk_words,
+        MIN(e.chunk_word_count) as min_chunk_words,
+        MAX(e.chunk_word_count) as max_chunk_words,
+        COUNT(DISTINCT e.chunk_index) as chunk_count
       FROM documents d
       LEFT JOIN document_embeddings e ON d.id = e.document_id
       WHERE d.correlation_id LIKE 'PIPELINE-%'
-      GROUP BY d.id, d.original_filename, d.word_count, d.source_url, d.extraction_method, d.created_at
+      GROUP BY d.id, d.original_filename, d.word_count, d.character_count, d.source_url, d.extraction_method, d.file_size, d.status, d.created_at
       ORDER BY d.created_at DESC
       LIMIT 10
     `);
@@ -1280,6 +1290,68 @@ async function getDocumentProcessingStats(dbClient: Client, correlationId: strin
   } catch (error) {
     return [];
   }
+}
+
+/**
+ * Generate detailed processing statistics table
+ */
+function generateProcessingStatsTable(documentStats: any[]): string {
+  if (documentStats.length === 0) {
+    return 'No document processing data available';
+  }
+
+  // Calculate totals
+  const totals = documentStats.reduce((acc, doc) => ({
+    documents: acc.documents + 1,
+    totalWords: acc.totalWords + (parseInt(doc.word_count) || 0),
+    totalChunks: acc.totalChunks + (parseInt(doc.chunk_count) || 0),
+    totalEmbeddings: acc.totalEmbeddings + (parseInt(doc.embeddings_created) || 0),
+    totalStored: acc.totalStored + (parseInt(doc.embeddings_stored) || 0),
+    totalFileSize: acc.totalFileSize + (parseInt(doc.file_size) || 0)
+  }), { documents: 0, totalWords: 0, totalChunks: 0, totalEmbeddings: 0, totalStored: 0, totalFileSize: 0 });
+
+  return `
+📊 DOCUMENT PROCESSING ANALYSIS TABLE
+┌──────────────────────────┬─────────┬─────────┬─────────────┬─────────────┬─────────────┬──────────┐
+│ Document Name            │ Size    │ Words   │ Chunks      │ Embeddings  │ Stored      │ Status   │
+│                          │         │         │ Created     │ Generated   │ in Vector   │          │
+│                          │         │         │             │             │ Database    │          │
+├──────────────────────────┼─────────┼─────────┼─────────────┼─────────────┼─────────────┼──────────┤${
+  documentStats.map(doc => {
+    const fileName = (doc.original_filename || 'Unknown').substring(0, 24);
+    const sizeKB = doc.file_size ? `${(parseInt(doc.file_size) / 1024).toFixed(1)}KB` : 'N/A';
+    const wordCount = doc.word_count || 0;
+    const chunkCount = doc.chunk_count || 0;
+    const embeddingsCreated = doc.embeddings_created || 0;
+    const embeddingsStored = doc.embeddings_stored || 0;
+    const status = doc.status || 'UNKNOWN';
+    
+    return `
+│ ${fileName.padEnd(24)} │ ${sizeKB.padEnd(7)} │ ${wordCount.toString().padEnd(7)} │ ${chunkCount.toString().padEnd(11)} │ ${embeddingsCreated.toString().padEnd(11)} │ ${embeddingsStored.toString().padEnd(11)} │ ${status.padEnd(8)} │`;
+  }).join('')
+}
+├──────────────────────────┼─────────┼─────────┼─────────────┼─────────────┼─────────────┼──────────┤
+│ TOTALS                   │ ${`${(totals.totalFileSize / 1024).toFixed(1)}KB`.padEnd(7)} │ ${totals.totalWords.toString().padEnd(7)} │ ${totals.totalChunks.toString().padEnd(11)} │ ${totals.totalEmbeddings.toString().padEnd(11)} │ ${totals.totalStored.toString().padEnd(11)} │ ${totals.documents.toString().padEnd(8)} │
+└──────────────────────────┴─────────┴─────────┴─────────────┴─────────────┴─────────────┴──────────┘
+
+📈 PROCESSING EFFICIENCY METRICS
+• Average Words per Document: ${totals.documents > 0 ? Math.round(totals.totalWords / totals.documents) : 0}
+• Average Chunks per Document: ${totals.documents > 0 ? (totals.totalChunks / totals.documents).toFixed(1) : 0}
+• Average Words per Chunk: ${totals.totalChunks > 0 ? Math.round(totals.totalWords / totals.totalChunks) : 0}
+• Embedding Success Rate: ${totals.totalChunks > 0 ? ((totals.totalEmbeddings / totals.totalChunks) * 100).toFixed(1) : 0}%
+• Storage Success Rate: ${totals.totalEmbeddings > 0 ? ((totals.totalStored / totals.totalEmbeddings) * 100).toFixed(1) : 0}%
+• Pipeline Completion Rate: ${totals.totalChunks > 0 ? ((totals.totalStored / totals.totalChunks) * 100).toFixed(1) : 0}%
+
+📄 DOCUMENT DETAILS
+${documentStats.map((doc, idx) => `
+${idx + 1}. ${doc.original_filename || 'Unknown Document'}
+   📊 Content: ${doc.word_count || 0} words, ${doc.character_count || 0} characters
+   🔗 Source: ${doc.source_url || 'Direct upload'}
+   📝 Method: ${doc.extraction_method || 'Unknown'}
+   ⚡ Processing: ${doc.chunk_count || 0} chunks → ${doc.embeddings_created || 0} embeddings → ${doc.embeddings_stored || 0} stored
+   📊 Chunk Stats: ${doc.avg_chunk_words ? `Avg ${parseInt(doc.avg_chunk_words)} words` : 'N/A'} ${doc.min_chunk_words && doc.max_chunk_words ? `(${doc.min_chunk_words}-${doc.max_chunk_words})` : ''}
+   ✅ Status: ${doc.status || 'UNKNOWN'}
+`).join('')}`;
 }
 
 /**
@@ -1373,11 +1445,9 @@ ${reportData.phases.map(phase =>
   `${phase.status === 'PASS' ? '✅' : '❌'} ${phase.name}: ${phase.status} (${((phase.duration || 0) / 1000).toFixed(1)}s, ${phase.steps.length} steps)`
 ).join('\n')}
 
-📄 DOCUMENT PROCESSING DETAILS
+📄 DOCUMENT PROCESSING ANALYSIS
 ────────────────────────────────────────────────────────────────────────
-${reportData.documentStats.length > 0 ? reportData.documentStats.map(doc => 
-  `📄 ${doc.original_filename}: ${doc.chunk_count} chunks, ${doc.word_count} words, ${doc.extraction_method} method`
-).join('\n') : 'No document processing details available'}
+${generateProcessingStatsTable(reportData.documentStats)}
 
 🎯 EXECUTIVE RECOMMENDATIONS
 ────────────────────────────────────────────────────────────────────────
