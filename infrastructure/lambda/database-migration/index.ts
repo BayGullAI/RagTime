@@ -1,7 +1,7 @@
 import { Handler } from 'aws-lambda';
 import { Client } from 'pg';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -72,6 +72,142 @@ const sendResponse = async (
     request.end();
   });
 };
+
+interface Migration {
+  version: string;
+  filename: string;
+  content: string;
+}
+
+/**
+ * Get list of migrations from S3 and sort them by version
+ */
+async function getMigrations(): Promise<Migration[]> {
+  const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+  
+  console.log('Listing migration files from S3...');
+  
+  // List all objects in the migrations asset
+  const listResponse = await s3Client.send(new ListObjectsV2Command({
+    Bucket: process.env.MIGRATIONS_ASSET_BUCKET,
+    Prefix: process.env.MIGRATIONS_ASSET_KEY || '',
+  }));
+  
+  if (!listResponse.Contents) {
+    throw new Error('No migration files found in S3');
+  }
+  
+  // Filter for .sql files and sort by filename (which contains version)
+  const sqlFiles = listResponse.Contents
+    .filter(obj => obj.Key?.endsWith('.sql'))
+    .sort((a, b) => (a.Key || '').localeCompare(b.Key || ''));
+  
+  console.log('Found migration files:', sqlFiles.map(f => f.Key));
+  
+  // Download each migration file
+  const migrations: Migration[] = [];
+  
+  for (const file of sqlFiles) {
+    if (!file.Key) continue;
+    
+    console.log(`Downloading migration: ${file.Key}`);
+    
+    const response = await s3Client.send(new GetObjectCommand({
+      Bucket: process.env.MIGRATIONS_ASSET_BUCKET,
+      Key: file.Key,
+    }));
+    
+    if (!response.Body) {
+      console.warn(`No content found for migration: ${file.Key}`);
+      continue;
+    }
+    
+    const content = await response.Body.transformToString();
+    const filename = path.basename(file.Key);
+    const version = filename.split('_')[0]; // Extract version from filename like "001_name.sql"
+    
+    migrations.push({
+      version,
+      filename,
+      content,
+    });
+  }
+  
+  return migrations;
+}
+
+/**
+ * Check which migrations have already been applied
+ */
+async function getAppliedMigrations(client: Client): Promise<Set<string>> {
+  try {
+    const result = await client.query('SELECT version FROM schema_migrations ORDER BY version');
+    return new Set(result.rows.map(row => row.version));
+  } catch (error: any) {
+    // If schema_migrations table doesn't exist, no migrations have been applied
+    if (error.code === '42P01') { // relation does not exist
+      console.log('schema_migrations table does not exist yet - no migrations applied');
+      return new Set();
+    }
+    throw error;
+  }
+}
+
+/**
+ * Run all pending migrations in sequence
+ */
+async function runMigrations(client: Client): Promise<void> {
+  console.log('Starting migration runner...');
+  
+  // Get all available migrations
+  const migrations = await getMigrations();
+  console.log(`Found ${migrations.length} migration files`);
+  
+  // Get already applied migrations
+  const appliedMigrations = await getAppliedMigrations(client);
+  console.log(`Found ${appliedMigrations.size} already applied migrations:`, Array.from(appliedMigrations));
+  
+  // Filter to only pending migrations
+  const pendingMigrations = migrations.filter(m => !appliedMigrations.has(m.version));
+  console.log(`Found ${pendingMigrations.length} pending migrations:`, pendingMigrations.map(m => m.filename));
+  
+  if (pendingMigrations.length === 0) {
+    console.log('No pending migrations to run');
+    return;
+  }
+  
+  // Run each pending migration in sequence
+  for (const migration of pendingMigrations) {
+    console.log(`Running migration ${migration.version}: ${migration.filename}`);
+    
+    try {
+      // Begin transaction for this migration
+      await client.query('BEGIN');
+      
+      // Execute the migration SQL
+      await client.query(migration.content);
+      
+      // Record that this migration has been applied
+      await client.query(
+        'INSERT INTO schema_migrations (version, description) VALUES ($1, $2) ON CONFLICT (version) DO NOTHING',
+        [migration.version, migration.filename]
+      );
+      
+      // Commit the transaction
+      await client.query('COMMIT');
+      
+      console.log(`✅ Successfully applied migration ${migration.version}: ${migration.filename}`);
+      
+    } catch (error) {
+      // Rollback on error
+      await client.query('ROLLBACK');
+      console.error(`❌ Failed to apply migration ${migration.version}:`, error);
+      throw new Error(`Migration ${migration.version} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  console.log('All pending migrations completed successfully');
+}
 
 export const handler: Handler = async (event: CloudFormationEvent) => {
   console.log('Starting database schema initialization...');
@@ -160,37 +296,9 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     }
     console.log('pgvector extension is available');
 
-    // Download migration SQL from S3 with fallback to embedded SQL
-    let migrationSQL: string;
-    
-    try {
-      console.log('Downloading SQL file from S3...');
-      
-      // Initialize S3 client
-      const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
-      
-      // Download SQL file from S3
-      const response = await s3Client.send(new GetObjectCommand({
-        Bucket: process.env.SQL_ASSET_BUCKET,
-        Key: process.env.SQL_ASSET_KEY,
-      }));
-      
-      if (!response.Body) {
-        throw new Error('No SQL file content received from S3');
-      }
-      
-      migrationSQL = await response.Body.transformToString();
-      console.log('Migration SQL downloaded successfully from S3, length:', migrationSQL.length);
-      
-    } catch (s3Error) {
-      console.error('Failed to download migration SQL file from S3:', s3Error);
-      throw new Error(`Cannot proceed without SQL migration file. S3 download failed: ${s3Error instanceof Error ? s3Error.message : String(s3Error)}`);
-    }
-    
-    // Execute migration SQL
-    console.log('Executing database migration...');
-    await client.query(migrationSQL);
-    console.log('Database schema initialized successfully');
+    // Run migrations in sequence
+    await runMigrations(client);
+    console.log('All database migrations completed successfully');
     
     // Basic verification that key tables were created
     const tableCheck = await client.query(`
@@ -204,12 +312,16 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
     await client.end();
     console.log('Database connection closed');
     
+    // Get final migration state for reporting
+    const finalAppliedMigrations = await getAppliedMigrations(client);
+    
     // Send success response to CloudFormation
     await sendResponse(event, 'SUCCESS', {
       message: 'Database schema initialized successfully',
       tablesCreated: tableCheck.rows.map(row => row.table_name),
-      migrationVersion: '001_initial_pgvector_schema',
-      sqlSource: 's3'
+      appliedMigrations: Array.from(finalAppliedMigrations).sort(),
+      totalMigrations: finalAppliedMigrations.size,
+      migrationSource: 's3'
     });
     
   } catch (error) {

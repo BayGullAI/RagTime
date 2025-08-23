@@ -7,6 +7,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as triggers from 'aws-cdk-lib/triggers';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { Construct } from 'constructs';
 import * as path from 'path';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
@@ -135,9 +137,10 @@ export class RagTimeCoreStack extends cdk.NestedStack {
       removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
 
-    // Upload SQL migration file to S3 as asset
-    const sqlAsset = new s3assets.Asset(this, 'SqlMigrationAsset', {
-      path: path.join(__dirname, '../../lambda/database-migration/001_initial_pgvector_schema.sql'),
+    // Upload all SQL migration files to S3 as a directory asset
+    const migrationsAsset = new s3assets.Asset(this, 'MigrationsAsset', {
+      path: path.join(__dirname, '../../lambda/database-migration'),
+      exclude: ['index.ts', 'package.json', '*.js', '*.map'], // Only include .sql files
     });
 
     // Create Lambda function to initialize database schema
@@ -157,8 +160,8 @@ export class RagTimeCoreStack extends cdk.NestedStack {
         DATABASE_CLUSTER_ENDPOINT: this.databaseCluster.clusterEndpoint.hostname,
         DATABASE_SECRET_NAME: this.databaseSecret.secretName,
         DATABASE_NAME: 'ragtime',
-        SQL_ASSET_BUCKET: sqlAsset.bucket.bucketName,
-        SQL_ASSET_KEY: sqlAsset.s3ObjectKey,
+        MIGRATIONS_ASSET_BUCKET: migrationsAsset.bucket.bucketName,
+        MIGRATIONS_ASSET_KEY: migrationsAsset.s3ObjectKey,
       },
       bundling: {
         minify: false,
@@ -174,13 +177,59 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     // Grant Lambda access to read database secret
     this.databaseSecret.grantRead(migrationLambda);
     
-    // Grant Lambda access to read SQL asset from S3
-    sqlAsset.grantRead(migrationLambda);
+    // Grant Lambda access to read migrations asset from S3
+    migrationsAsset.grantRead(migrationLambda);
 
     // Create trigger to run migration Lambda after database cluster and instances are ready
     this.databaseInitialization = new triggers.Trigger(this, 'InitialSchemaMigration', {
       handler: migrationLambda,
       executeAfter: [this.databaseCluster, this.databaseSecret],
+    });
+
+    // Create database validation canary to verify correlation tracking infrastructure
+    const validationCanaryLambda = new NodejsFunction(this, 'DatabaseValidationCanaryFunction', {
+      description: 'Validate correlation tracking schema and indexes are properly configured',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'handler',
+      entry: path.join(__dirname, '../../lambda/database-validation-canary/index.ts'),
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 512,
+      vpc: vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      environment: {
+        DATABASE_CLUSTER_ENDPOINT: this.databaseCluster.clusterEndpoint.hostname,
+        DATABASE_SECRET_NAME: this.databaseSecret.secretName,
+        DATABASE_NAME: 'ragtime',
+      },
+      bundling: {
+        minify: false,
+        sourceMap: true,
+        target: 'es2020',
+        externalModules: [
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+        ],
+      },
+    });
+
+    // Grant validation canary access to read database secret
+    this.databaseSecret.grantRead(validationCanaryLambda);
+
+    // Create EventBridge rule to run validation canary every 15 minutes
+    const validationCanaryRule = new events.Rule(this, 'DatabaseValidationCanarySchedule', {
+      description: 'Run database validation canary every 15 minutes to verify correlation tracking',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+    });
+
+    // Add the validation canary Lambda as target
+    validationCanaryRule.addTarget(new targets.LambdaFunction(validationCanaryLambda));
+
+    // Also create a trigger to run validation canary once after migrations complete
+    const initialValidationTrigger = new triggers.Trigger(this, 'InitialValidationTrigger', {
+      handler: validationCanaryLambda,
+      executeAfter: [this.databaseInitialization], // Run after migrations complete
     });
 
     // Outputs
@@ -197,6 +246,11 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     new cdk.CfnOutput(this, 'DatabaseSecretName', {
       value: this.databaseSecret.secretName,
       description: 'Database credentials secret name',
+    });
+
+    new cdk.CfnOutput(this, 'DatabaseValidationCanaryFunctionName', {
+      value: validationCanaryLambda.functionName,
+      description: 'Database validation canary Lambda function name',
     });
 
     new cdk.CfnOutput(this, 'DatabaseName', {
