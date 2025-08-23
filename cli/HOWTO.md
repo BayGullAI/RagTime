@@ -226,6 +226,9 @@ The CLI expects these API endpoints to be available:
 - `POST /documents` - Upload documents
 - `GET /documents` - List documents
 - `GET /documents/{id}` - Get document details  
+- `GET /documents/{id}/analysis` - Get comprehensive pipeline analysis (PostgreSQL + embeddings data)
 - `DELETE /documents/{id}` - Delete document
 
 All endpoints require `tenant_id` parameter.
+
+**Note**: The `/documents/{id}/analysis` endpoint is used by the `--status` flag to perform comprehensive pipeline verification. This endpoint should be implemented by a Lambda function with VPC access to query the PostgreSQL database for embeddings and chunk data.

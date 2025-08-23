@@ -2,7 +2,6 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { getApiClient, formatStatus, handleError } from '../utils';
-import { getDocumentEmbeddings, getDocumentMetadata, getEmbeddingStats, closeDatabaseConnection } from '../database';
 import { verifyS3Object, getS3ObjectPreview } from '../s3-service';
 
 export const getCommand = new Command('get')
@@ -63,102 +62,115 @@ export const getCommand = new Command('get')
         console.log(`  ❌ S3 Info: ${chalk.red('MISSING from DynamoDB')}`);
       }
 
-      console.log('\n' + chalk.cyan('🗃️ PostgreSQL Metadata:'));
+      console.log('\n' + chalk.cyan('🗃️ Database Analysis via API:'));
       
-      // 3. Check PostgreSQL documents table
+      // 3. Get database analysis through API Gateway -> Lambda
       try {
-        const pgDoc = await getDocumentMetadata(documentId);
-        if (pgDoc) {
-          console.log(`  ✅ Document Record: ${chalk.green('EXISTS')}`);
-          console.log(`  Original Filename: ${pgDoc.original_filename}`);
-          console.log(`  Content Type: ${pgDoc.content_type || 'Unknown'}`);
-          console.log(`  File Size: ${pgDoc.file_size ? (pgDoc.file_size / 1024).toFixed(1) + 'KB' : 'Unknown'}`);
-          console.log(`  Total Chunks: ${pgDoc.total_chunks || 0}`);
-          console.log(`  PG Status: ${formatStatus(pgDoc.status)}`);
-          if (pgDoc.error_message) {
-            console.log(`  PG Error: ${chalk.red(pgDoc.error_message)}`);
-          }
-          console.log(`  PG Created: ${new Date(pgDoc.created_at).toLocaleString()}`);
-        } else {
-          console.log(`  ❌ Document Record: ${chalk.red('NOT FOUND')}`);
-        }
-      } catch (error: any) {
-        console.log(`  ❌ PostgreSQL Connection: ${chalk.red('FAILED')}`);
-        console.log(`  Error: ${error.message}`);
-      }
-
-      console.log('\n' + chalk.cyan('🧩 Embeddings & Chunks Analysis:'));
-      
-      // 4. Check embeddings in pgvector
-      try {
-        const embeddings = await getDocumentEmbeddings(documentId);
-        const stats = await getEmbeddingStats(documentId);
+        const analysis = await client.getDocumentAnalysis(documentId);
         
-        if (embeddings.length > 0) {
-          console.log(`  ✅ Embeddings: ${chalk.green(`${stats.totalEmbeddings} FOUND`)}`);
-          console.log(`  Unique Chunks: ${stats.uniqueChunks}`);
-          console.log(`  Avg Content Length: ${stats.avgContentLength.toFixed(0)} characters`);
-          console.log(`  First Embedding: ${stats.firstEmbedding ? new Date(stats.firstEmbedding).toLocaleString() : 'Unknown'}`);
-          console.log(`  Last Embedding: ${stats.lastEmbedding ? new Date(stats.lastEmbedding).toLocaleString() : 'Unknown'}`);
-          
-          // Show embedding details table
-          if (embeddings.length <= 10) {
-            console.log('\n  📋 Chunk Details:');
-            const table = new Table({
-              head: ['Index', 'Content Preview', 'Length', 'Created'],
-              colWidths: [8, 40, 10, 20]
-            });
-            
-            embeddings.forEach(emb => {
-              const preview = emb.content.length > 35 ? 
-                emb.content.substring(0, 35) + '...' : emb.content;
-              table.push([
-                emb.chunk_index,
-                preview,
-                emb.content.length,
-                new Date(emb.created_at).toLocaleTimeString()
-              ]);
-            });
-            
-            console.log(table.toString());
+        if (analysis.postgresql) {
+          const pgData = analysis.postgresql;
+          if (pgData.exists) {
+            console.log(`  ✅ Document Record: ${chalk.green('EXISTS')}`);
+            console.log(`  Original Filename: ${pgData.original_filename || 'Unknown'}`);
+            console.log(`  Content Type: ${pgData.content_type || 'Unknown'}`);
+            console.log(`  File Size: ${pgData.file_size ? (pgData.file_size / 1024).toFixed(1) + 'KB' : 'Unknown'}`);
+            console.log(`  Total Chunks: ${pgData.total_chunks || 0}`);
+            console.log(`  PG Status: ${formatStatus(pgData.status || 'UNKNOWN')}`);
+            if (pgData.error_message) {
+              console.log(`  PG Error: ${chalk.red(pgData.error_message)}`);
+            }
+            console.log(`  PG Created: ${pgData.created_at ? new Date(pgData.created_at).toLocaleString() : 'Unknown'}`);
           } else {
-            console.log(`  📋 ${embeddings.length} chunks (too many to display individually)`);
+            console.log(`  ❌ Document Record: ${chalk.red('NOT FOUND')}`);
           }
         } else {
-          console.log(`  ❌ Embeddings: ${chalk.red('NONE FOUND')}`);
+          console.log(`  ❌ PostgreSQL Query: ${chalk.red('NO DATA')}`);
         }
-      } catch (error: any) {
-        console.log(`  ❌ Embedding Query: ${chalk.red('FAILED')}`);
-        console.log(`  Error: ${error.message}`);
-      }
 
-      // 5. Pipeline Status Summary
-      console.log('\n' + chalk.cyan('📊 Pipeline Status Summary:'));
-      const uploadTime = new Date(doc.created_at).getTime();
-      const updateTime = new Date(doc.updated_at).getTime();
-      const processingTime = updateTime > uploadTime ? Math.round((updateTime - uploadTime) / 1000) : 0;
-      
-      console.log(`  Processing Time: ${processingTime}s`);
-      console.log(`  DynamoDB Status: ${formatStatus(doc.status)}`);
-      
-      // Overall pipeline health
-      const s3Info = doc.s3_bucket && doc.s3_key ? await verifyS3Object(doc.s3_bucket, doc.s3_key) : { exists: false };
-      const hasEmbeddings = (await getEmbeddingStats(documentId)).totalEmbeddings > 0;
-      
-      let pipelineStatus = 'INCOMPLETE';
-      if (doc.status === 'PROCESSED' && s3Info.exists && hasEmbeddings) {
-        pipelineStatus = 'FULLY_PROCESSED';
-      } else if (doc.status === 'FAILED') {
-        pipelineStatus = 'FAILED';
+        console.log('\n' + chalk.cyan('🧩 Embeddings & Chunks Analysis:'));
+        
+        if (analysis.embeddings) {
+          const embData = analysis.embeddings;
+          if (embData.total_embeddings > 0) {
+            console.log(`  ✅ Embeddings: ${chalk.green(`${embData.total_embeddings} FOUND`)}`);
+            console.log(`  Unique Chunks: ${embData.unique_chunks || 0}`);
+            console.log(`  Avg Content Length: ${embData.avg_content_length ? Math.round(embData.avg_content_length) : 0} characters`);
+            console.log(`  First Embedding: ${embData.first_embedding ? new Date(embData.first_embedding).toLocaleString() : 'Unknown'}`);
+            console.log(`  Last Embedding: ${embData.last_embedding ? new Date(embData.last_embedding).toLocaleString() : 'Unknown'}`);
+            
+            // Show embedding details table if available
+            if (embData.chunks && embData.chunks.length <= 10) {
+              console.log('\n  📋 Chunk Details:');
+              const table = new Table({
+                head: ['Index', 'Content Preview', 'Length', 'Created'],
+                colWidths: [8, 40, 10, 20]
+              });
+              
+              embData.chunks.forEach((chunk: any) => {
+                const preview = chunk.content && chunk.content.length > 35 ? 
+                  chunk.content.substring(0, 35) + '...' : chunk.content || '';
+                table.push([
+                  chunk.chunk_index || 0,
+                  preview,
+                  chunk.content ? chunk.content.length : 0,
+                  chunk.created_at ? new Date(chunk.created_at).toLocaleTimeString() : 'Unknown'
+                ]);
+              });
+              
+              console.log(table.toString());
+            } else if (embData.total_embeddings > 10) {
+              console.log(`  📋 ${embData.total_embeddings} chunks (too many to display individually)`);
+            }
+          } else {
+            console.log(`  ❌ Embeddings: ${chalk.red('NONE FOUND')}`);
+          }
+        } else {
+          console.log(`  ❌ Embedding Query: ${chalk.red('NO DATA')}`);
+        }
+        // 5. Pipeline Status Summary
+        console.log('\n' + chalk.cyan('📊 Pipeline Status Summary:'));
+        const uploadTime = new Date(doc.created_at).getTime();
+        const updateTime = new Date(doc.updated_at).getTime();
+        const processingTime = updateTime > uploadTime ? Math.round((updateTime - uploadTime) / 1000) : 0;
+        
+        console.log(`  Processing Time: ${processingTime}s`);
+        console.log(`  DynamoDB Status: ${formatStatus(doc.status)}`);
+        
+        // Overall pipeline health from API analysis
+        const s3Info = doc.s3_bucket && doc.s3_key ? await verifyS3Object(doc.s3_bucket, doc.s3_key) : { exists: false };
+        const hasEmbeddings = analysis.embeddings && analysis.embeddings.total_embeddings > 0;
+        
+        let pipelineStatus = 'INCOMPLETE';
+        if (doc.status === 'PROCESSED' && s3Info.exists && hasEmbeddings) {
+          pipelineStatus = 'FULLY_PROCESSED';
+        } else if (doc.status === 'FAILED') {
+          pipelineStatus = 'FAILED';
+        }
+        
+        console.log(`  Overall Pipeline: ${formatStatus(pipelineStatus)}`);
+        
+      } catch (error: any) {
+        console.log(`  ❌ Database Analysis API: ${chalk.red('FAILED')}`);
+        console.log(`  Error: ${error.message}`);
+        
+        // Fallback message for missing endpoint
+        if (error.response?.status === 404) {
+          console.log(`  💡 Note: Database analysis endpoint not yet implemented in API`);
+        }
+        
+        // Fallback Pipeline Status Summary without analysis data
+        console.log('\n' + chalk.cyan('📊 Pipeline Status Summary:'));
+        const uploadTime = new Date(doc.created_at).getTime();
+        const updateTime = new Date(doc.updated_at).getTime();
+        const processingTime = updateTime > uploadTime ? Math.round((updateTime - uploadTime) / 1000) : 0;
+        
+        console.log(`  Processing Time: ${processingTime}s`);
+        console.log(`  DynamoDB Status: ${formatStatus(doc.status)}`);
+        console.log(`  Overall Pipeline: ${formatStatus('UNKNOWN')}`);
       }
-      
-      console.log(`  Overall Pipeline: ${formatStatus(pipelineStatus)}`);
-      
-      // Close database connection
-      await closeDatabaseConnection();
       
     } catch (error: any) {
-      await closeDatabaseConnection();
       handleError(error, 'Get');
     }
   });

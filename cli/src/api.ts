@@ -78,4 +78,11 @@ export class ApiClient {
       params: { tenant_id: this.config.tenantId },
     });
   }
+
+  async getDocumentAnalysis(assetId: string): Promise<any> {
+    const response = await this.client.get(`/documents/${assetId}/analysis`, {
+      params: { tenant_id: this.config.tenantId },
+    });
+    return response.data;
+  }
 }
