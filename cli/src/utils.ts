@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { ApiClient, Document } from './api';
+import { ApiClient } from './api';
 import { getConfig } from './config';
 
 let cachedClient: ApiClient | null = null;
@@ -12,12 +12,16 @@ export async function getApiClient(): Promise<ApiClient> {
   return cachedClient;
 }
 
-export function formatStatus(status: Document['status']): string {
+export function formatStatus(status: string): string {
   switch (status) {
     case 'PROCESSED':
+    case 'FULLY_PROCESSED':
       return chalk.green(status);
     case 'FAILED':
       return chalk.red(status);
+    case 'UPLOADED':
+    case 'PROCESSING':
+    case 'INCOMPLETE':
     default:
       return chalk.yellow(status);
   }

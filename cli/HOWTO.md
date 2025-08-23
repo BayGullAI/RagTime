@@ -82,28 +82,89 @@ ragtime get abc-123-def-456
 
 Example output:
 ```
-Document: abc-123-def-456
-Name: contract.pdf
-Status: PROCESSED
-Size: 2.00MB
-Uploaded: 1/15/2024, 10:30:25 AM
-Content Type: application/pdf
-Word Count: 1250
+🔍 Analyzing document: abc-123-def-456
+
+📊 DynamoDB Metadata:
+  Document ID: abc-123-def-456
+  Filename: contract.pdf
+  Status: PROCESSED
+  Size: 2048.0KB
+  Content Type: application/pdf
+  Created: 1/15/2024, 10:30:25 AM
+  Updated: 1/15/2024, 10:30:48 AM
+  Word Count: 1250
 ```
 
-### Check Processing Status
+### Comprehensive Pipeline Analysis
 
 ```bash
 ragtime get abc-123-def-456 --status
 ```
 
+This performs end-to-end verification of the entire document processing pipeline:
+
 Example output:
 ```
-Document: contract.pdf (abc-123-def-456)
-Status: PROCESSED
-Words: 1250
-Processing time: 23s
+🔍 Analyzing document: abc-123-def-456
+
+📊 DynamoDB Metadata:
+  Document ID: abc-123-def-456
+  Filename: contract.pdf
+  Status: PROCESSED
+  Size: 2048.0KB
+  Content Type: application/pdf
+  Created: 1/15/2024, 10:30:25 AM
+  Updated: 1/15/2024, 10:30:48 AM
+  Word Count: 1250
+
+🗄️ S3 Storage Verification:
+  ✅ S3 Object: EXISTS
+  Bucket: ragtime-documents-dev-174919262752-us-east-1
+  Key: documents/default-tenant/abc-123-def-456/contract.pdf
+  S3 Size: 2048.0KB
+  Last Modified: 1/15/2024, 10:30:26 AM
+  Content Type: application/pdf
+  Preview: "Contract Agreement between..."
+
+🗃️ PostgreSQL Metadata:
+  ✅ Document Record: EXISTS
+  Original Filename: contract.pdf
+  Content Type: application/pdf
+  File Size: 2048.0KB
+  Total Chunks: 15
+  PG Status: PROCESSED
+  PG Created: 1/15/2024, 10:30:28 AM
+
+🧩 Embeddings & Chunks Analysis:
+  ✅ Embeddings: 15 FOUND
+  Unique Chunks: 15
+  Avg Content Length: 347 characters
+  First Embedding: 1/15/2024, 10:30:35 AM
+  Last Embedding: 1/15/2024, 10:30:42 AM
+
+  📋 Chunk Details:
+  ┌────────┬────────────────────────────────────────┬────────┬──────────────────────┐
+  │ Index  │ Content Preview                        │ Length │ Created              │
+  ├────────┼────────────────────────────────────────┼────────┼──────────────────────┤
+  │ 0      │ This contract outlines the terms...    │ 380    │ 10:30:35 AM          │
+  │ 1      │ The parties agree to the following...  │ 420    │ 10:30:36 AM          │
+  │ 2      │ Payment terms shall be as follows...   │ 290    │ 10:30:37 AM          │
+  │ ...    │ ...                                    │ ...    │ ...                  │
+  └────────┴────────────────────────────────────────┴────────┴──────────────────────┘
+
+📊 Pipeline Status Summary:
+  Processing Time: 23s
+  DynamoDB Status: PROCESSED
+  Overall Pipeline: FULLY_PROCESSED
 ```
+
+**Pipeline Verification Features:**
+- ✅ **DynamoDB Metadata**: Document record and processing status
+- ✅ **S3 Storage**: File existence, size, timestamps, content preview
+- ✅ **PostgreSQL Metadata**: Document tracking in vector database
+- ✅ **Embeddings Analysis**: Chunk count, content length, creation times
+- ✅ **Chunk Details**: Individual chunk previews (for ≤10 chunks)
+- ✅ **Overall Health**: End-to-end pipeline status verification
 
 ### Delete Document
 

@@ -13,6 +13,8 @@ export interface Document {
   updated_at: string;
   error_message?: string;
   word_count?: number;
+  s3_bucket?: string;
+  s3_key?: string;
 }
 
 export interface ListResponse {
