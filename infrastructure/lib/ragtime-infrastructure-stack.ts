@@ -87,6 +87,7 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
     this.coreStack = new RagTimeCoreStack(this, 'CoreStack', {
       environment,
       vpc: this.vpc,
+      documentsBucket: this.documentsBucket,
     });
 
     // Nested Stack: Compute (Lambda + API Gateway)

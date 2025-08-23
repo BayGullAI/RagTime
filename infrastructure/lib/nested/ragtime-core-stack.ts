@@ -9,6 +9,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as triggers from 'aws-cdk-lib/triggers';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import * as path from 'path';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
@@ -16,6 +17,7 @@ import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 export interface RagTimeCoreStackProps extends cdk.NestedStackProps {
   environment: string;
   vpc: ec2.Vpc;
+  documentsBucket?: s3.IBucket; // Optional reference to documents bucket for pipeline testing
 }
 
 export class RagTimeCoreStack extends cdk.NestedStack {
@@ -27,7 +29,7 @@ export class RagTimeCoreStack extends cdk.NestedStack {
   constructor(scope: Construct, id: string, props: RagTimeCoreStackProps) {
     super(scope, id, props);
 
-    const { environment, vpc } = props;
+    const { environment, vpc, documentsBucket } = props;
 
     // OpenAI API Key Secret
     const openaiSecretName = `ragtime-openai-api-key-${environment}`;
@@ -232,6 +234,59 @@ export class RagTimeCoreStack extends cdk.NestedStack {
     //   handler: validationCanaryLambda,
     //   executeAfter: [this.databaseInitialization], // Run after migrations complete
     // });
+
+    // PHASE 2: Pipeline Testing Canary (Basic Implementation - Web extraction to be added later)
+    
+    // Create Pipeline Testing Canary (Phase 2 implementation - without web extraction for now)
+    if (documentsBucket) {
+      const pipelineTestingCanary = new NodejsFunction(this, 'PipelineTestingCanaryFunction', {
+        description: 'Comprehensive end-to-end pipeline testing canary',
+        runtime: lambda.Runtime.NODEJS_22_X,
+        handler: 'handler',
+        entry: path.join(__dirname, '../../lambda/pipeline-testing-canary/index.ts'),
+        timeout: cdk.Duration.minutes(10),
+        memorySize: 1024,
+        vpc: vpc,
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        },
+        securityGroups: [lambdaSecurityGroup],
+        environment: {
+          DATABASE_CLUSTER_ENDPOINT: this.databaseCluster.clusterEndpoint.hostname,
+          DATABASE_SECRET_NAME: this.databaseSecret.secretName,
+          DATABASE_NAME: 'ragtime',
+          DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+          OPENAI_SECRET_NAME: this.openAISecret.secretName,
+        },
+        bundling: {
+          minify: false,
+          sourceMap: true,
+          target: 'es2020',
+          externalModules: [
+            '@aws-sdk/*',
+          ],
+        },
+      });
+
+      // Grant pipeline testing canary necessary permissions
+      this.databaseSecret.grantRead(pipelineTestingCanary);
+      this.openAISecret.grantRead(pipelineTestingCanary);
+      documentsBucket.grantReadWrite(pipelineTestingCanary);
+
+      // TODO: Enable after initial testing
+      // Create EventBridge rule to run pipeline canary every 30 minutes
+      // const pipelineCanaryRule = new events.Rule(this, 'PipelineTestingCanarySchedule', {
+      //   description: 'Run comprehensive pipeline testing canary every 30 minutes',
+      //   schedule: events.Schedule.rate(cdk.Duration.minutes(30)),
+      // });
+      // pipelineCanaryRule.addTarget(new targets.LambdaFunction(pipelineTestingCanary));
+
+      // Output pipeline canary function name
+      new cdk.CfnOutput(this, 'PipelineTestingCanaryFunctionName', {
+        value: pipelineTestingCanary.functionName,
+        description: 'Pipeline testing canary Lambda function name',
+      });
+    }
 
     // Outputs
     new cdk.CfnOutput(this, 'OpenAISecretName', {
