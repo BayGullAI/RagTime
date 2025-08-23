@@ -1,4 +1,5 @@
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import fetch from 'node-fetch';
 
 export interface EmbeddingResponse {
   embedding: number[];
@@ -94,7 +95,7 @@ export class OpenAIService {
       throw new Error('Invalid response from OpenAI embeddings API');
     }
 
-    return data.data.map((item: any, index: number) => ({
+    return data.data.map((item: any, _index: number) => ({
       embedding: item.embedding,
       tokens: Math.floor((data.usage?.total_tokens || 0) / texts.length)
     }));

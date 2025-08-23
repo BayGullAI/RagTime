@@ -25,6 +25,7 @@ describe('Document Upload Lambda', () => {
     
     const corsEvent: Partial<APIGatewayProxyEvent> = {
       httpMethod: 'OPTIONS',
+      headers: {},
     };
 
     const result = await handler(corsEvent as APIGatewayProxyEvent);
@@ -43,6 +44,7 @@ describe('Document Upload Lambda', () => {
     
     const getEvent: Partial<APIGatewayProxyEvent> = {
       httpMethod: 'GET',
+      headers: {},
     };
 
     const result = await handler(getEvent as APIGatewayProxyEvent);

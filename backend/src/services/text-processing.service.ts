@@ -1,4 +1,4 @@
-import { OpenAIService, EmbeddingResponse } from './openai.service';
+import { OpenAIService } from './openai.service';
 import { DocumentService } from './document.service';
 
 export interface TextChunk {
@@ -13,6 +13,8 @@ export interface ProcessDocumentRequest {
   documentId: string;
   chunkSize?: number;
   chunkOverlap?: number;
+  correlationId?: string;
+  embeddingModel?: string;
 }
 
 export interface ProcessDocumentResult {
@@ -87,7 +89,7 @@ export class TextProcessingService {
    * Process a document by chunking and generating embeddings
    */
   async processDocument(request: ProcessDocumentRequest): Promise<ProcessDocumentResult> {
-    const { text, documentId, chunkSize = 1000, chunkOverlap = 200 } = request;
+    const { text, documentId, chunkSize = 1000, chunkOverlap = 200, correlationId, embeddingModel } = request;
 
     // Chunk the text
     const textChunks = this.chunkText(text, chunkSize, chunkOverlap);
@@ -105,10 +107,13 @@ export class TextProcessingService {
       tokens: embeddings[index].tokens
     }));
 
-    // Store embeddings in database
+    // Store embeddings in database with correlation tracking
     await this.documentService.storeDocumentEmbeddings(
       documentId,
-      processedChunks
+      processedChunks,
+      correlationId,
+      'TEXT_PROCESSING',
+      embeddingModel || 'text-embedding-3-small'
     );
 
     const totalTokens = processedChunks.reduce((sum, chunk) => sum + chunk.tokens, 0);

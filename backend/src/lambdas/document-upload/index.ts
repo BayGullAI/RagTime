@@ -4,6 +4,11 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { createResponse, createErrorResponse } from '../../utils/response.utils';
+import { initializeLogger, StructuredLogger } from '../../utils/structured-logger';
+import { 
+  generateCorrelationId, 
+  extractCorrelationIdFromEvent
+} from '../../utils/correlation';
 
 interface DocumentMetadata {
   tenant_id: string;
@@ -17,6 +22,10 @@ interface DocumentMetadata {
   created_at: string;
   updated_at: string;
   error_message?: string;
+  correlation_id: string;
+  source_url?: string;
+  extraction_method?: string;
+  word_count?: number;
   gsi1_sk: string; // For time-based queries: created_at#asset_id
   gsi2_pk: string; // For status-based queries: tenant_id#status
   gsi2_sk: string; // For status-based queries: created_at#asset_id
@@ -139,10 +148,22 @@ function validateInput(fields: Record<string, string>, files: Array<{ filename: 
 async function uploadToS3(
   file: { filename: string; contentType: string; content: Buffer; },
   assetId: string,
-  tenantId: string
+  tenantId: string,
+  logger: StructuredLogger
 ): Promise<{ bucket: string; key: string; }> {
   const bucket = process.env.DOCUMENTS_BUCKET_NAME!;
   const key = `documents/${tenantId}/${assetId}/${file.filename}`;
+  const uploadStartTime = Date.now();
+
+  logger.info('S3_UPLOAD_START', {
+    fileName: file.filename,
+    fileSize: file.content.length,
+    contentType: file.contentType,
+    s3Bucket: bucket,
+    s3Key: key,
+    tenantId: tenantId,
+    assetId: assetId
+  }, `Starting S3 upload for ${file.filename}`);
 
   try {
     await s3Client.send(new PutObjectCommand({
@@ -157,21 +178,83 @@ async function uploadToS3(
       },
     }));
 
+    const uploadDuration = Date.now() - uploadStartTime;
+
+    logger.info('S3_UPLOAD_SUCCESS', {
+      fileName: file.filename,
+      s3Bucket: bucket,
+      s3Key: key,
+      fileSize: file.content.length,
+      uploadDuration: uploadDuration,
+      tenantId: tenantId,
+      assetId: assetId
+    }, `File successfully uploaded to S3`);
+
+    logger.performance('S3_UPLOAD', uploadDuration, {
+      fileName: file.filename,
+      fileSize: file.content.length
+    });
+
     return { bucket, key };
   } catch (error) {
-    console.error('Error uploading to S3:', error);
+    const uploadDuration = Date.now() - uploadStartTime;
+    logger.logError('S3_UPLOAD_FAILED', error as Error, {
+      fileName: file.filename,
+      s3Bucket: bucket,
+      s3Key: key,
+      fileSize: file.content.length,
+      uploadDuration: uploadDuration,
+      tenantId: tenantId,
+      assetId: assetId
+    });
     throw new Error('Failed to upload file to storage');
   }
 }
 
-async function saveDocumentMetadata(metadata: DocumentMetadata): Promise<void> {
+async function saveDocumentMetadata(metadata: DocumentMetadata, logger: StructuredLogger): Promise<void> {
+  const saveStartTime = Date.now();
+
+  logger.info('METADATA_SAVE_START', {
+    documentId: metadata.asset_id,
+    tenantId: metadata.tenant_id,
+    fileName: metadata.file_name,
+    status: metadata.status,
+    dbTable: process.env.DOCUMENTS_TABLE_NAME
+  }, `Starting metadata save for ${metadata.file_name}`);
+
   try {
     await dynamoClient.send(new PutCommand({
       TableName: process.env.DOCUMENTS_TABLE_NAME!,
       Item: metadata,
     }));
+
+    const saveDuration = Date.now() - saveStartTime;
+
+    logger.info('METADATA_SAVED', {
+      documentId: metadata.asset_id,
+      tenantId: metadata.tenant_id,
+      status: metadata.status,
+      fileName: metadata.file_name,
+      correlationId: metadata.correlation_id,
+      sourceUrl: metadata.source_url || null,
+      dbTable: process.env.DOCUMENTS_TABLE_NAME,
+      saveDuration: saveDuration
+    }, `Document metadata saved to DynamoDB`);
+
+    logger.performance('DYNAMODB_PUT', saveDuration, {
+      operation: 'saveDocumentMetadata',
+      documentId: metadata.asset_id
+    });
+
   } catch (error) {
-    console.error('Error saving document metadata:', error);
+    const saveDuration = Date.now() - saveStartTime;
+    logger.logError('METADATA_SAVE_FAILED', error as Error, {
+      documentId: metadata.asset_id,
+      tenantId: metadata.tenant_id,
+      fileName: metadata.file_name,
+      dbTable: process.env.DOCUMENTS_TABLE_NAME,
+      saveDuration: saveDuration
+    });
     throw new Error('Failed to save document metadata');
   }
 }
@@ -180,10 +263,19 @@ async function updateDocumentStatus(
   tenantId: string,
   assetId: string,
   status: DocumentMetadata['status'],
+  logger: StructuredLogger,
   errorMessage?: string
 ): Promise<void> {
   const now = new Date().toISOString();
+  const updateStartTime = Date.now();
   
+  logger.info('STATUS_UPDATE_START', {
+    documentId: assetId,
+    tenantId: tenantId,
+    newStatus: status,
+    errorMessage: errorMessage || null
+  }, `Starting status update to ${status}`);
+
   try {
     const updateParams: any = {
       TableName: process.env.DOCUMENTS_TABLE_NAME!,
@@ -209,8 +301,32 @@ async function updateDocumentStatus(
     }
 
     await dynamoClient.send(new UpdateCommand(updateParams));
+
+    const updateDuration = Date.now() - updateStartTime;
+
+    logger.info('STATUS_UPDATED', {
+      documentId: assetId,
+      tenantId: tenantId,
+      newStatus: status,
+      errorMessage: errorMessage || null,
+      updateDuration: updateDuration,
+      nextStep: status === 'PROCESSED' ? 'COMPLETE' : 'TEXT_PROCESSING'
+    }, `Document status updated to ${status}`);
+
+    logger.performance('DYNAMODB_UPDATE', updateDuration, {
+      operation: 'updateDocumentStatus',
+      documentId: assetId,
+      status: status
+    });
+
   } catch (error) {
-    console.error('Error updating document status:', error);
+    const updateDuration = Date.now() - updateStartTime;
+    logger.logError('STATUS_UPDATE_FAILED', error as Error, {
+      documentId: assetId,
+      tenantId: tenantId,
+      newStatus: status,
+      updateDuration: updateDuration
+    });
     throw new Error('Failed to update document status');
   }
 }
@@ -222,39 +338,77 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   let assetId: string | undefined;
   let tenantId: string | undefined;
 
+  // Initialize structured logger
+  const logger = initializeLogger(event, 'document-upload');
+
+  // Extract or generate correlation ID
+  let correlationId = extractCorrelationIdFromEvent(event);
+  if (!correlationId) {
+    correlationId = generateCorrelationId('UPLOAD');
+    logger.setCorrelationId(correlationId);
+  }
+
+  logger.pipelineStage('UPLOAD_START', {
+    httpMethod: event.httpMethod,
+    path: event.path,
+    userAgent: event.headers['User-Agent'] || event.headers['user-agent'],
+    contentLength: event.headers['Content-Length'] || event.headers['content-length']
+  }, 'Document upload request received');
+
   try {
-    console.log('Document upload request received');
 
     // Handle CORS preflight
     if (event.httpMethod === 'OPTIONS') {
+      logger.info('CORS_PREFLIGHT', {}, 'CORS preflight request handled');
       return createResponse(200, { message: 'CORS preflight successful' });
     }
 
     if (event.httpMethod !== 'POST') {
+      logger.warn('METHOD_NOT_ALLOWED', { 
+        method: event.httpMethod,
+        allowedMethods: ['POST', 'OPTIONS']
+      }, `Method ${event.httpMethod} not allowed`);
       return createResponse(405, { error: 'Method not allowed' });
     }
 
     // Validate content type
     const contentType = event.headers['content-type'] || event.headers['Content-Type'] || '';
     if (!contentType.includes('multipart/form-data')) {
+      logger.warn('INVALID_CONTENT_TYPE', { 
+        contentType: contentType,
+        required: 'multipart/form-data'
+      }, 'Invalid Content-Type header');
       return createResponse(400, { error: 'Content-Type must be multipart/form-data' });
     }
 
     // Extract boundary
     const boundaryMatch = contentType.match(/boundary=(.+)/);
     if (!boundaryMatch) {
+      logger.warn('MISSING_BOUNDARY', { contentType }, 'Missing boundary in Content-Type header');
       return createResponse(400, { error: 'Missing boundary in Content-Type header' });
     }
 
     const boundary = boundaryMatch[1];
     
     if (!event.body) {
+      logger.warn('MISSING_BODY', {}, 'Request body is required');
       return createResponse(400, { error: 'Request body is required' });
     }
+
+    logger.info('PARSING_MULTIPART', {
+      bodyLength: event.body.length,
+      boundary: boundary
+    }, 'Starting multipart form data parsing');
 
     // Parse multipart form data
     const { files, fields } = parseMultipartFormData(event.body, boundary);
     
+    logger.info('MULTIPART_PARSED', {
+      fileCount: files.length,
+      fieldCount: Object.keys(fields).length,
+      fields: Object.keys(fields)
+    }, 'Multipart form data parsed successfully');
+
     // Validate input
     const { tenantId: validatedTenantId, file } = validateInput(fields, files);
     tenantId = validatedTenantId;
@@ -263,12 +417,20 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     assetId = uuidv4();
     const now = new Date().toISOString();
 
-    console.log(`Processing document upload: tenant=${tenantId}, asset=${assetId}, file=${file.filename}`);
+    logger.info('UPLOAD_START', {
+      fileName: file.filename,
+      fileSize: file.content.length,
+      contentType: file.contentType,
+      tenantId: tenantId,
+      assetId: assetId,
+      sourceUrl: null,
+      extractionMethod: 'direct'
+    }, `Starting upload for ${file.filename}`);
 
     // Upload file to S3
-    const { bucket, key } = await uploadToS3(file, assetId, tenantId);
+    const { bucket, key } = await uploadToS3(file, assetId, tenantId, logger);
 
-    // Create initial document metadata
+    // Create initial document metadata with correlation tracking
     const documentMetadata: DocumentMetadata = {
       tenant_id: tenantId,
       asset_id: assetId,
@@ -280,20 +442,35 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       status: 'UPLOADED',
       created_at: now,
       updated_at: now,
+      correlation_id: correlationId,
+      extraction_method: 'direct',
+      word_count: file.contentType === 'text/plain' ? file.content.toString().split(/\s+/).length : undefined,
       gsi1_sk: `${now}#${assetId}`,
       gsi2_pk: `${tenantId}#UPLOADED`,
       gsi2_sk: `${now}#${assetId}`,
     };
 
     // Save metadata to DynamoDB
-    await saveDocumentMetadata(documentMetadata);
+    await saveDocumentMetadata(documentMetadata, logger);
 
     // Update status directly to PROCESSED (no text processing)
-    await updateDocumentStatus(tenantId, assetId, 'PROCESSED');
+    await updateDocumentStatus(tenantId, assetId, 'PROCESSED', logger);
 
     const totalTime = Date.now() - startTime;
 
-    console.log(`Document upload completed successfully: ${file.filename} (${file.content.length} bytes)`);
+    logger.pipelineStage('UPLOAD_COMPLETE', {
+      fileName: file.filename,
+      documentId: assetId,
+      totalDuration: totalTime,
+      s3Location: `s3://${bucket}/${key}`,
+      nextStep: 'COMPLETE'
+    }, `Upload pipeline completed successfully`);
+
+    logger.performance('UPLOAD_TOTAL', totalTime, {
+      fileName: file.filename,
+      fileSize: file.content.length,
+      documentId: assetId
+    });
 
     return createResponse(200, {
       success: true,
@@ -307,28 +484,47 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         created_at: now,
         s3_bucket: bucket,
         s3_key: key,
+        correlation_id: correlationId,
       },
       processing_time: totalTime,
       message: `Document uploaded successfully.`,
     });
 
   } catch (error) {
-    console.error('Document upload error:', error);
+    const totalTime = Date.now() - startTime;
+    
+    logger.logError('UPLOAD_FAILED', error as Error, {
+      fileName: tenantId && assetId ? 'unknown' : undefined,
+      tenantId: tenantId,
+      documentId: assetId,
+      totalDuration: totalTime,
+      pipelineStage: 'UPLOAD'
+    });
     
     // If we have tenant and asset IDs, try to update status to FAILED
     if (tenantId && assetId) {
       try {
-        await updateDocumentStatus(tenantId, assetId, 'FAILED', error instanceof Error ? error.message : 'Unknown error');
+        await updateDocumentStatus(tenantId, assetId, 'FAILED', logger, error instanceof Error ? error.message : 'Unknown error');
       } catch (updateError) {
-        console.error('Failed to update document status to FAILED:', updateError);
+        logger.logError('STATUS_UPDATE_AFTER_FAILURE', updateError as Error, {
+          documentId: assetId,
+          tenantId: tenantId,
+          originalError: error instanceof Error ? error.message : 'Unknown error'
+        });
       }
     }
+
+    logger.performance('UPLOAD_FAILED', totalTime, {
+      error: true,
+      errorType: error instanceof Error ? error.name : 'Unknown',
+      documentId: assetId || 'unknown'
+    });
 
     return createErrorResponse(
       500,
       'Document upload failed',
       error instanceof Error ? error.message : 'Unknown error occurred',
-      { processing_time: Date.now() - startTime }
+      { processing_time: totalTime, correlation_id: correlationId }
     );
   }
 };
