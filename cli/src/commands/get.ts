@@ -28,8 +28,8 @@ export const getCommand = new Command('get')
         console.log(`  Error: ${chalk.red(doc.error_message)}`);
       }
       
-      // Always show processing details - get database analysis through API Gateway -> Lambda
-      console.log('\n' + chalk.cyan('🔧 Processing Details:'));
+      // Always show processing results
+      console.log('\n' + chalk.cyan('📈 Processing Results:'));
       
       try {
         const analysis = await client.getDocumentAnalysis(documentId);
@@ -38,40 +38,36 @@ export const getCommand = new Command('get')
         const embData = analysis.embeddings;
         
         if (pgData && pgData.exists) {
-          console.log(`  Total Chunks: ${chalk.yellow(pgData.total_chunks || 0)}`);
-          console.log(`  PostgreSQL Status: ${formatStatus(pgData.status || 'UNKNOWN')}`);
+          console.log(`  Chunks Created: ${chalk.yellow(pgData.total_chunks || 0)}`);
+          console.log(`  Embeddings Generated: ${embData?.total_embeddings ? chalk.green(embData.total_embeddings) : chalk.red('0')}`);
+          
+          // Determine overall processing status
+          let overallStatus = 'INCOMPLETE';
+          let statusColor = chalk.red;
+          
+          if (doc.status === 'PROCESSED' && pgData.status === 'completed' && embData?.total_embeddings > 0) {
+            overallStatus = 'FULLY_PROCESSED';
+            statusColor = chalk.green;
+          } else if (doc.status === 'FAILED') {
+            overallStatus = 'FAILED';
+            statusColor = chalk.red;
+          } else if (pgData.status === 'completed' && embData?.total_embeddings > 0) {
+            overallStatus = 'PROCESSED_BUT_STATUS_NOT_UPDATED';
+            statusColor = chalk.yellow;
+          }
+          
+          console.log(`  Overall Status: ${statusColor(overallStatus)}`);
+          
+          // Show correlation ID for debugging if needed
           if (pgData.correlation_id) {
-            console.log(`  Correlation ID: ${pgData.correlation_id}`);
+            console.log(`  Trace ID: ${chalk.gray(pgData.correlation_id)}`);
           }
         } else {
-          console.log(`  ${chalk.red('⚠️  No processing details found in PostgreSQL')}`);
-        }
-
-        if (embData && embData.total_embeddings > 0) {
-          console.log(`  Embeddings Generated: ${chalk.green(embData.total_embeddings)}`);
-          if (embData.embedding_model) {
-            console.log(`  Embedding Model: ${embData.embedding_model}`);
-          }
-          if (embData.processing_stage) {
-            console.log(`  Processing Stage: ${embData.processing_stage}`);
-          }
-        } else {
-          console.log(`  ${chalk.red('⚠️  No embeddings found - processing may have failed')}`);
-        }
-
-        // Processing steps completed (based on available data)
-        const stepsCompleted = [];
-        if (pgData?.total_chunks > 0) stepsCompleted.push("Text Chunking");
-        if (embData?.total_embeddings > 0) stepsCompleted.push("Embeddings Generation");
-        if (pgData?.status === 'completed') stepsCompleted.push("Database Storage");
-        if (doc.status === 'PROCESSED') stepsCompleted.push("Status Update");
-        
-        if (stepsCompleted.length > 0) {
-          console.log(`  Steps Completed: ${chalk.green(stepsCompleted.join(', '))}`);
+          console.log(`  ${chalk.red('⚠️  No processing results found in database')}`);
         }
         
       } catch (error: any) {
-        console.log(`  ${chalk.red('⚠️  Could not retrieve processing details')}`);
+        console.log(`  ${chalk.red('⚠️  Could not retrieve processing results')}`);
         console.log(`  Error: ${error.message}`);
       }
 
