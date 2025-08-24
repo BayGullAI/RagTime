@@ -79,112 +79,27 @@ interface Migration {
   content: string;
 }
 
-/**
- * Legacy embedded migrations (deprecated - now using SQL files)
- * Keeping for backward compatibility but migrations are read from .sql files
- */
-const LEGACY_EMBEDDED_MIGRATIONS: Migration[] = [
-  {
-    version: '002',
-    filename: '002_add_correlation_tracking.sql',
-    content: `-- Migration: 002_add_correlation_tracking
--- Description: Add correlation tracking fields for pipeline monitoring and traceability
--- Created: 2025-08-23
-
--- Add correlation tracking fields to documents table
-ALTER TABLE documents 
-ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(100),
-ADD COLUMN IF NOT EXISTS source_url TEXT,
-ADD COLUMN IF NOT EXISTS extraction_method VARCHAR(50),
-ADD COLUMN IF NOT EXISTS word_count INTEGER,
-ADD COLUMN IF NOT EXISTS character_count INTEGER,
-ADD COLUMN IF NOT EXISTS processing_duration INTEGER; -- in milliseconds
-
--- Add correlation tracking fields to document_embeddings table
-ALTER TABLE document_embeddings 
-ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(100),
-ADD COLUMN IF NOT EXISTS processing_stage VARCHAR(50),
-ADD COLUMN IF NOT EXISTS chunk_word_count INTEGER,
-ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(100),
-ADD COLUMN IF NOT EXISTS embedding_duration INTEGER; -- in milliseconds
-
--- Create indexes for efficient correlation tracking queries
-CREATE INDEX IF NOT EXISTS documents_correlation_id_idx 
-    ON documents (correlation_id);
-
-CREATE INDEX IF NOT EXISTS document_embeddings_correlation_id_idx 
-    ON document_embeddings (correlation_id);
-
--- Create index for processing stage queries (useful for monitoring pipeline stages)
-CREATE INDEX IF NOT EXISTS document_embeddings_processing_stage_idx 
-    ON document_embeddings (processing_stage);
-
--- Create composite index for correlation tracking and status
-CREATE INDEX IF NOT EXISTS documents_correlation_status_idx 
-    ON documents (correlation_id, status);
-
--- Create index for time-based correlation queries
-CREATE INDEX IF NOT EXISTS documents_created_correlation_idx 
-    ON documents (created_at, correlation_id);
-
--- Add comments for documentation
-COMMENT ON COLUMN documents.correlation_id IS 'Unique identifier for tracking documents through the processing pipeline';
-COMMENT ON COLUMN documents.source_url IS 'Original URL or source location of the document if uploaded from URL';
-COMMENT ON COLUMN documents.extraction_method IS 'Method used to extract text (upload, url, pdf_extraction, etc.)';
-COMMENT ON COLUMN documents.word_count IS 'Total number of words in the original document';
-COMMENT ON COLUMN documents.character_count IS 'Total number of characters in the original document';
-COMMENT ON COLUMN documents.processing_duration IS 'Total time in milliseconds to process the document';
-
-COMMENT ON COLUMN document_embeddings.correlation_id IS 'Links embedding to original document processing pipeline';
-COMMENT ON COLUMN document_embeddings.processing_stage IS 'Pipeline stage where this embedding was created (chunking, embedding, etc.)';
-COMMENT ON COLUMN document_embeddings.chunk_word_count IS 'Number of words in this specific chunk';
-COMMENT ON COLUMN document_embeddings.embedding_model IS 'Model used to generate this embedding (e.g., text-embedding-3-small)';
-COMMENT ON COLUMN document_embeddings.embedding_duration IS 'Time in milliseconds to generate this specific embedding';
-
--- Record this migration
-INSERT INTO schema_migrations (version, description) 
-VALUES ('002', 'Add correlation tracking fields for pipeline monitoring and traceability')
-ON CONFLICT (version) DO NOTHING;`
-  },
-  {
-    version: '003',
-    filename: '003_standardize_asset_id_columns.sql',
-    content: `-- Migration: 003_standardize_asset_id_columns
--- Description: Standardize to use asset_id consistently across all tables
--- Created: 2025-08-24
-
--- Rename columns to use consistent asset_id naming
--- This avoids confusion between id/document_id for the same data
-
--- Update documents table: rename id -> asset_id
-ALTER TABLE documents RENAME COLUMN id TO asset_id;
-
--- Update document_embeddings table: rename document_id -> asset_id  
-ALTER TABLE document_embeddings RENAME COLUMN document_id TO asset_id;
-
--- Update indexes to use new column name
-DROP INDEX IF EXISTS document_embeddings_document_id_idx;
-CREATE INDEX IF NOT EXISTS document_embeddings_asset_id_idx 
-    ON document_embeddings (asset_id);
-
-DROP INDEX IF EXISTS document_embeddings_document_chunk_idx;
-CREATE INDEX IF NOT EXISTS document_embeddings_asset_chunk_idx 
-    ON document_embeddings (asset_id, chunk_index);
-
--- Record this migration
-INSERT INTO schema_migrations (version, description) 
-VALUES ('003', 'Standardize to use asset_id consistently across all tables')
-ON CONFLICT (version) DO NOTHING;`
-  }
-];
+// No embedded migrations needed - all migrations are now read from SQL files
 
 /**
- * Get list of migrations from local SQL files
+ * Get list of migrations from S3 asset system with local fallback
  */
 async function getMigrations(): Promise<Migration[]> {
+  // Try S3 asset system first (production)
+  if (process.env.MIGRATIONS_ASSET_BUCKET && process.env.MIGRATIONS_ASSET_KEY) {
+    try {
+      const s3Migrations = await getMigrationsFromS3();
+      if (s3Migrations.length > 0) {
+        console.log(`Using ${s3Migrations.length} migrations from S3 asset system`);
+        return s3Migrations;
+      }
+    } catch (error) {
+      console.warn('S3 migration loading failed, falling back to local files:', error);
+    }
+  }
+
+  // Fallback to local files (bundled with Lambda)
   const migrations: Migration[] = [];
-  
-  // Read SQL files from local directory (bundled with Lambda)
   const migrationFiles = ['001_initial_pgvector_schema.sql', '002_add_correlation_tracking.sql', '003_standardize_asset_id_columns.sql'];
   
   for (const filename of migrationFiles) {
@@ -194,14 +109,14 @@ async function getMigrations(): Promise<Migration[]> {
         const content = fs.readFileSync(filePath, 'utf-8');
         const version = filename.split('_')[0];
         migrations.push({ version, filename, content });
-        console.log(`Loaded migration ${version} from ${filename}`);
+        console.log(`Loaded migration ${version} from local file ${filename}`);
       }
     } catch (error) {
       console.warn(`Failed to load migration ${filename}:`, error);
     }
   }
   
-  console.log(`Using ${migrations.length} migrations from SQL files`);
+  console.log(`Using ${migrations.length} migrations from local files`);
   return migrations;
 }
 
