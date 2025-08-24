@@ -35,16 +35,16 @@ export class DocumentService implements IDocumentService {
 
       // Update or insert document record with correlation tracking
       await this.db.query(
-        `INSERT INTO documents (id, total_chunks, status, correlation_id, updated_at) 
+        `INSERT INTO documents (asset_id, total_chunks, status, correlation_id, updated_at) 
          VALUES ($1, $2, 'completed', $3, NOW())
-         ON CONFLICT (id) 
+         ON CONFLICT (asset_id) 
          DO UPDATE SET total_chunks = $2, status = 'completed', correlation_id = $3, updated_at = NOW()`,
         [documentId, chunks.length, correlationId]
       );
 
       // Delete existing embeddings for this document
       await this.db.query(
-        'DELETE FROM document_embeddings WHERE document_id = $1',
+        'DELETE FROM document_embeddings WHERE asset_id = $1',
         [documentId]
       );
 
@@ -53,7 +53,7 @@ export class DocumentService implements IDocumentService {
         const chunkWordCount = chunk.content.split(/\s+/).length;
         await this.db.query(
           `INSERT INTO document_embeddings 
-           (document_id, chunk_index, content, embedding, correlation_id, processing_stage, 
+           (asset_id, chunk_index, content, embedding, correlation_id, processing_stage, 
             chunk_word_count, embedding_model, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
           [
@@ -245,7 +245,7 @@ export class DocumentService implements IDocumentService {
 
       // Delete embeddings
       await this.db.query(
-        'DELETE FROM document_embeddings WHERE document_id = $1',
+        'DELETE FROM document_embeddings WHERE asset_id = $1',
         [documentId]
       );
 

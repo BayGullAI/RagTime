@@ -145,6 +145,36 @@ COMMENT ON COLUMN document_embeddings.embedding_duration IS 'Time in millisecond
 INSERT INTO schema_migrations (version, description) 
 VALUES ('002', 'Add correlation tracking fields for pipeline monitoring and traceability')
 ON CONFLICT (version) DO NOTHING;`
+  },
+  {
+    version: '003',
+    filename: '003_standardize_asset_id_columns.sql',
+    content: `-- Migration: 003_standardize_asset_id_columns
+-- Description: Standardize to use asset_id consistently across all tables
+-- Created: 2025-08-24
+
+-- Rename columns to use consistent asset_id naming
+-- This avoids confusion between id/document_id for the same data
+
+-- Update documents table: rename id -> asset_id
+ALTER TABLE documents RENAME COLUMN id TO asset_id;
+
+-- Update document_embeddings table: rename document_id -> asset_id  
+ALTER TABLE document_embeddings RENAME COLUMN document_id TO asset_id;
+
+-- Update indexes to use new column name
+DROP INDEX IF EXISTS document_embeddings_document_id_idx;
+CREATE INDEX IF NOT EXISTS document_embeddings_asset_id_idx 
+    ON document_embeddings (asset_id);
+
+DROP INDEX IF EXISTS document_embeddings_document_chunk_idx;
+CREATE INDEX IF NOT EXISTS document_embeddings_asset_chunk_idx 
+    ON document_embeddings (asset_id, chunk_index);
+
+-- Record this migration
+INSERT INTO schema_migrations (version, description) 
+VALUES ('003', 'Standardize to use asset_id consistently across all tables')
+ON CONFLICT (version) DO NOTHING;`
   }
 ];
 
@@ -245,6 +275,81 @@ async function getAppliedMigrations(client: Client): Promise<Set<string>> {
 }
 
 /**
+ * Handle schema deletion for CloudFormation Delete events
+ */
+async function handleSchemaDelete(event: CloudFormationEvent): Promise<void> {
+  try {
+    // Get database credentials
+    const secretsClient = new SecretsManagerClient({ 
+      region: process.env.AWS_REGION || 'us-east-1'
+    });
+    
+    console.log('Retrieving database credentials for cleanup...');
+    const secretResponse = await secretsClient.send(
+      new GetSecretValueCommand({ SecretId: process.env.DATABASE_SECRET_NAME })
+    );
+    
+    if (!secretResponse.SecretString) {
+      throw new Error('No secret string found in Secrets Manager response');
+    }
+    
+    const credentials: DatabaseCredentials = JSON.parse(secretResponse.SecretString);
+    
+    // Connect to PostgreSQL
+    const client = new Client({
+      host: process.env.DATABASE_CLUSTER_ENDPOINT,
+      port: 5432,
+      database: process.env.DATABASE_NAME || 'ragtime',
+      user: credentials.username,
+      password: credentials.password,
+      ssl: { rejectUnauthorized: false },
+      connectionTimeoutMillis: 30000,
+    });
+    
+    await client.connect();
+    console.log('Connected to database for cleanup');
+    
+    // Drop tables in reverse dependency order
+    const dropStatements = [
+      'DROP TABLE IF EXISTS document_embeddings CASCADE;',
+      'DROP TABLE IF EXISTS documents CASCADE;', 
+      'DROP TABLE IF EXISTS schema_migrations CASCADE;',
+      'DROP EXTENSION IF EXISTS vector CASCADE;'
+    ];
+    
+    for (const statement of dropStatements) {
+      try {
+        console.log(`Executing: ${statement}`);
+        await client.query(statement);
+      } catch (error) {
+        console.warn(`Warning during cleanup: ${error}`);
+        // Continue with other cleanup steps
+      }
+    }
+    
+    await client.end();
+    console.log('Database cleanup completed');
+    
+    await sendResponse(event, 'SUCCESS', { 
+      message: 'Database schema deleted successfully',
+      tablesDropped: ['document_embeddings', 'documents', 'schema_migrations'],
+      extensionsDropped: ['vector']
+    });
+    
+  } catch (error) {
+    console.error('Database cleanup failed:', error);
+    await sendResponse(
+      event, 
+      'FAILED', 
+      {},
+      undefined,
+      `Database cleanup failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
+    throw error;
+  }
+}
+
+/**
  * Run all pending migrations in sequence
  */
 async function runMigrations(client: Client): Promise<void> {
@@ -305,10 +410,10 @@ export const handler: Handler = async (event: CloudFormationEvent) => {
   console.log('Event:', JSON.stringify(event, null, 2));
   
   try {
-    // Handle CloudFormation Delete requests (skip for trigger invocations)
+    // Handle CloudFormation Delete requests
     if (event.RequestType === 'Delete') {
-      console.log('CloudFormation Delete request - no action needed for database schema');
-      await sendResponse(event, 'SUCCESS', { message: 'Delete completed successfully' });
+      console.log('CloudFormation Delete request - cleaning up database schema');
+      await handleSchemaDelete(event);
       return;
     }
 
