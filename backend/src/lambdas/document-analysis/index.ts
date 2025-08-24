@@ -64,13 +64,14 @@ async function getPostgreSQLPool(): Promise<Pool> {
     const credentials = await getDatabaseCredentials();
     dbPool = new Pool({
       host: process.env.DATABASE_CLUSTER_ENDPOINT,
-      port: 5432,
+      port: credentials.port || 5432,
       database: process.env.DATABASE_NAME || 'ragtime',
       user: credentials.username,
       password: credentials.password,
       ssl: { rejectUnauthorized: false },
       max: 5,
-      connectionTimeoutMillis: 30000,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
     });
   }
   return dbPool;
@@ -80,7 +81,7 @@ async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
   try {
     const pool = await getPostgreSQLPool();
     const result = await pool.query(
-      'SELECT * FROM documents WHERE id = $1 LIMIT 1',
+      'SELECT * FROM documents WHERE asset_id = $1 LIMIT 1',
       [assetId]
     );
     
@@ -117,7 +118,7 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
         MIN(created_at) as first_embedding,
         MAX(created_at) as last_embedding
       FROM document_embeddings 
-      WHERE document_id = $1
+      WHERE asset_id = $1
     `;
     
     const statsResult = await pool.query(statsQuery, [assetId]);
@@ -127,7 +128,7 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
     const chunksQuery = `
       SELECT chunk_index, content, created_at 
       FROM document_embeddings 
-      WHERE document_id = $1 
+      WHERE asset_id = $1 
       ORDER BY chunk_index 
       LIMIT 3
     `;
