@@ -8,7 +8,7 @@ export interface Document {
   file_name: string;
   file_size: number;
   content_type: string;
-  status: 'UPLOADED' | 'PROCESSED' | 'FAILED';
+  status: 'UPLOADED' | 'PROCESSING' | 'PROCESSED' | 'FAILED';
   created_at: string;
   updated_at: string;
   error_message?: string;
@@ -44,7 +44,22 @@ export class ApiClient {
       headers: form.getHeaders(),
     });
 
-    return response.data.document;
+    // Handle new response format
+    if (response.data.document) {
+      return response.data.document;
+    } else {
+      // New format: { assetId, status, message }
+      return {
+        tenant_id: this.config.tenantId,
+        asset_id: response.data.assetId,
+        file_name: filePath.split('/').pop() || 'unknown',
+        file_size: content.length,
+        content_type: contentType,
+        status: response.data.status as 'UPLOADED' | 'PROCESSING' | 'PROCESSED' | 'FAILED',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
   }
 
   async uploadString(content: string, filename: string): Promise<Document> {

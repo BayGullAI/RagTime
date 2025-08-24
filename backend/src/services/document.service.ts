@@ -36,7 +36,8 @@ export class DocumentService {
     }>,
     correlationId?: string,
     processingStage?: string,
-    embeddingModel?: string
+    embeddingModel?: string,
+    originalFileName?: string
   ): Promise<void> {
     await this.db.connect();
 
@@ -46,11 +47,11 @@ export class DocumentService {
 
       // Update or insert document record with correlation tracking
       await this.db.query(
-        `INSERT INTO documents (id, total_chunks, status, correlation_id, updated_at) 
-         VALUES ($1, $2, 'completed', $3, NOW())
+        `INSERT INTO documents (id, total_chunks, status, correlation_id, original_filename, updated_at) 
+         VALUES ($1, $2, 'completed', $3, $4, NOW())
          ON CONFLICT (id) 
-         DO UPDATE SET total_chunks = $2, status = 'completed', correlation_id = $3, updated_at = NOW()`,
-        [documentId, chunks.length, correlationId]
+         DO UPDATE SET total_chunks = $2, status = 'completed', correlation_id = $3, original_filename = $4, updated_at = NOW()`,
+        [documentId, chunks.length, correlationId, originalFileName || 'unknown']
       );
 
       // Delete existing embeddings for this document
@@ -59,24 +60,30 @@ export class DocumentService {
         [documentId]
       );
 
-      // Insert new embeddings with correlation tracking
-      for (const chunk of chunks) {
-        const chunkWordCount = chunk.content.split(/\s+/).length;
+      // Batch insert new embeddings with correlation tracking
+      if (chunks.length > 0) {
+        const values = chunks.map((chunk, index) => {
+          const paramStart = index * 8 + 1;
+          return `($${paramStart}, $${paramStart + 1}, $${paramStart + 2}, $${paramStart + 3}, $${paramStart + 4}, $${paramStart + 5}, $${paramStart + 6}, $${paramStart + 7}, NOW(), NOW())`;
+        });
+        
+        const params = chunks.flatMap(chunk => [
+          documentId,
+          chunk.index,
+          chunk.content,
+          JSON.stringify(chunk.embedding),
+          correlationId,
+          processingStage || 'EMBEDDING_GENERATION',
+          chunk.content.split(/\s+/).length,
+          embeddingModel || 'text-embedding-3-small'
+        ]);
+
         await this.db.query(
           `INSERT INTO document_embeddings 
            (document_id, chunk_index, content, embedding, correlation_id, processing_stage, 
             chunk_word_count, embedding_model, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-          [
-            documentId,
-            chunk.index,
-            chunk.content,
-            JSON.stringify(chunk.embedding),
-            correlationId,
-            processingStage || 'EMBEDDING_GENERATION',
-            chunkWordCount,
-            embeddingModel || 'text-embedding-3-small'
-          ]
+           VALUES ${values.join(', ')}`,
+          params
         );
       }
 

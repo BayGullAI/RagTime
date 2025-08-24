@@ -19,7 +19,7 @@ interface DocumentMetadata {
   content_type: string;
   s3_bucket: string;
   s3_key: string;
-  status: 'UPLOADED' | 'PROCESSED' | 'FAILED';
+  status: 'UPLOADED' | 'PROCESSING' | 'PROCESSED' | 'FAILED';
   created_at: string;
   updated_at: string;
   error_message?: string;
@@ -43,6 +43,14 @@ const SUPPORTED_CONTENT_TYPES = [
   'application/msword', // Future support
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // Future support
 ];
+
+function getTextProcessingLambdaName(): string {
+  const functionName = process.env.TEXT_PROCESSING_FUNCTION_NAME;
+  if (!functionName) {
+    throw new Error('TEXT_PROCESSING_FUNCTION_NAME environment variable not set');
+  }
+  return functionName;
+}
 
 function parseMultipartFormData(body: string, boundary: string): { 
   files: Array<{ 
@@ -157,6 +165,15 @@ async function uploadToS3(
   const key = `documents/${tenantId}/${assetId}/${file.filename}`;
   const uploadStartTime = Date.now();
 
+  logger.pipelineStage('STEP2_S3_START', {
+    fileName: file.filename,
+    fileSize: file.content.length,
+    s3Bucket: bucket,
+    s3Key: key,
+    step: '2/5',
+    stepName: 'S3_STORAGE'
+  }, `Pipeline Step 2/5: Starting S3 storage for ${file.filename}`);
+
   logger.info('S3_UPLOAD_START', {
     fileName: file.filename,
     fileSize: file.content.length,
@@ -181,6 +198,17 @@ async function uploadToS3(
     }));
 
     const uploadDuration = Date.now() - uploadStartTime;
+
+    logger.pipelineStage('STEP2_S3_COMPLETE', {
+      fileName: file.filename,
+      s3Bucket: bucket,
+      s3Key: key,
+      fileSize: file.content.length,
+      uploadDuration: uploadDuration,
+      step: '2/5',
+      stepName: 'S3_STORAGE',
+      nextStep: file.contentType === 'text/plain' ? 'TEXT_PROCESSING' : 'COMPLETE'
+    }, `Pipeline Step 2/5 Complete: File stored in S3`);
 
     logger.info('S3_UPLOAD_SUCCESS', {
       fileName: file.filename,
@@ -216,6 +244,14 @@ async function uploadToS3(
 async function saveDocumentMetadata(metadata: DocumentMetadata, logger: StructuredLogger): Promise<void> {
   const saveStartTime = Date.now();
 
+  logger.pipelineStage('STEP1_DYNAMODB_START', {
+    documentId: metadata.asset_id,
+    tenantId: metadata.tenant_id,
+    fileName: metadata.file_name,
+    step: '1/5',
+    stepName: 'DYNAMODB_ENTRY'
+  }, `Pipeline Step 1/5: Creating DynamoDB entry for ${metadata.file_name}`);
+
   logger.info('METADATA_SAVE_START', {
     documentId: metadata.asset_id,
     tenantId: metadata.tenant_id,
@@ -231,6 +267,16 @@ async function saveDocumentMetadata(metadata: DocumentMetadata, logger: Structur
     }));
 
     const saveDuration = Date.now() - saveStartTime;
+
+    logger.pipelineStage('STEP1_DYNAMODB_COMPLETE', {
+      documentId: metadata.asset_id,
+      tenantId: metadata.tenant_id,
+      status: metadata.status,
+      step: '1/5',
+      stepName: 'DYNAMODB_ENTRY',
+      nextStep: 'S3_STORAGE',
+      saveDuration: saveDuration
+    }, `Pipeline Step 1/5 Complete: DynamoDB entry created`);
 
     logger.info('METADATA_SAVED', {
       documentId: metadata.asset_id,
@@ -339,16 +385,20 @@ async function triggerTextProcessing(
   s3Bucket: string,
   s3Key: string,
   correlationId: string,
+  tenantId: string,
   logger: StructuredLogger
 ): Promise<void> {
   const processStartTime = Date.now();
+
+  // Get the text processing Lambda function name from environment
+  const textProcessingLambdaName = getTextProcessingLambdaName();
 
   logger.info('TEXT_PROCESSING_START', {
     documentId: assetId,
     fileName: file.filename,
     s3Bucket: s3Bucket,
     s3Key: s3Key,
-    textProcessingLambda: process.env.TEXT_PROCESSING_LAMBDA_NAME
+    textProcessingLambda: textProcessingLambdaName
   }, `Triggering text processing for ${file.filename}`);
 
   try {
@@ -362,19 +412,19 @@ async function triggerTextProcessing(
 
     const payload = {
       text: textContent,
+      bucketName: s3Bucket,
+      objectKey: s3Key,
       documentId: assetId,
-      fileName: file.filename,
-      s3Bucket: s3Bucket,
-      s3Key: s3Key,
+      tenantId: tenantId,
       chunkSize: 1000,
       chunkOverlap: 200,
       correlationId: correlationId
     };
 
-    // Invoke text processing Lambda synchronously (blocking call)
+    // Invoke text processing Lambda asynchronously (non-blocking)
     const command = new InvokeCommand({
-      FunctionName: process.env.TEXT_PROCESSING_LAMBDA_NAME!,
-      InvocationType: 'RequestResponse', // Synchronous invocation - blocks until completion
+      FunctionName: textProcessingLambdaName,
+      InvocationType: 'Event', // Asynchronous invocation - returns immediately
       Payload: JSON.stringify({
         httpMethod: 'POST',
         body: JSON.stringify(payload),
@@ -388,33 +438,23 @@ async function triggerTextProcessing(
     const response = await lambdaClient.send(command);
     const processDuration = Date.now() - processStartTime;
 
-    if (response.StatusCode !== 200) {
-      throw new Error(`Text processing Lambda returned status ${response.StatusCode}`);
+    if (response.StatusCode !== 202) {
+      throw new Error(`Text processing Lambda async invocation failed with status ${response.StatusCode}`);
     }
 
-    const responsePayload = response.Payload ? JSON.parse(new TextDecoder().decode(response.Payload)) : {};
-    
-    if (responsePayload.statusCode && responsePayload.statusCode !== 200) {
-      const errorMessage = typeof responsePayload.body === 'string' ? 
-        responsePayload.body : 
-        JSON.stringify(responsePayload.body || 'Unknown error');
-      throw new Error(`Text processing failed: ${errorMessage}`);
-    }
-
-    logger.info('TEXT_PROCESSING_SUCCESS', {
+    logger.info('TEXT_PROCESSING_QUEUED', {
       documentId: assetId,
       fileName: file.filename,
       processingDuration: processDuration,
       lambdaStatusCode: response.StatusCode,
-      chunksGenerated: responsePayload.result?.totalChunks || 0,
-      totalTokens: responsePayload.result?.totalTokens || 0
-    }, `Text processing completed successfully - ${responsePayload.result?.totalChunks || 0} chunks generated`);
+      invocationType: 'Event'
+    }, `Text processing queued successfully - processing will complete asynchronously`);
 
-    logger.performance('TEXT_PROCESSING', processDuration, {
+    logger.performance('TEXT_PROCESSING_QUEUE', processDuration, {
       fileName: file.filename,
       documentId: assetId,
       textLength: textContent.length,
-      chunksGenerated: responsePayload.result?.totalChunks || 0
+      invocationType: 'async'
     });
 
   } catch (error) {
@@ -425,7 +465,7 @@ async function triggerTextProcessing(
       s3Bucket: s3Bucket,
       s3Key: s3Key,
       processingDuration: processDuration,
-      textProcessingLambda: process.env.TEXT_PROCESSING_LAMBDA_NAME
+      textProcessingLambda: textProcessingLambdaName
     });
     throw new Error(`Text processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -553,26 +593,35 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     // Save metadata to DynamoDB
     await saveDocumentMetadata(documentMetadata, logger);
 
-    // Trigger text processing (this will block until completion)
-    try {
-      await triggerTextProcessing(file, assetId, bucket, key, correlationId, logger);
-      
-      // Only mark as PROCESSED after text processing succeeds
-      await updateDocumentStatus(tenantId, assetId, 'PROCESSED', logger);
-      
-      logger.pipelineStage('TEXT_PROCESSING_PIPELINE_COMPLETE', {
-        documentId: assetId,
-        fileName: file.filename,
-        status: 'PROCESSED'
-      }, 'Text processing pipeline completed successfully');
-      
-    } catch (textProcessingError) {
-      // Mark as FAILED if text processing fails
-      await updateDocumentStatus(tenantId, assetId, 'FAILED', logger, 
-        `Text processing failed: ${textProcessingError instanceof Error ? textProcessingError.message : 'Unknown error'}`);
-      
-      throw textProcessingError;
+    // Trigger text processing for text/plain files
+    if (file.contentType === 'text/plain') {
+      try {
+        await triggerTextProcessing(file, assetId, bucket, key, correlationId, tenantId, logger);
+        // Mark as PROCESSING after successful async invocation
+        await updateDocumentStatus(tenantId, assetId, 'PROCESSING', logger);
+      } catch (textProcessingError) {
+        logger.logError('TEXT_PROCESSING_INVOCATION_FAILED', textProcessingError as Error, {
+          documentId: assetId,
+          fileName: file.filename
+        });
+        // Keep as UPLOADED if text processing fails, so it can be retried
+        await updateDocumentStatus(tenantId, assetId, 'UPLOADED', logger, 'Text processing failed');
+        throw textProcessingError;
+      }
+    } else {
+      // For non-text files, mark as UPLOADED for now (future: add other processing)
+      await updateDocumentStatus(tenantId, assetId, 'UPLOADED', logger);
     }
+    
+    // Determine final status based on processing
+    const finalStatus = file.contentType === 'text/plain' ? 'PROCESSING' : 'UPLOADED';
+    
+    logger.pipelineStage('UPLOAD_COMPLETE', {
+      documentId: assetId,
+      fileName: file.filename,
+      status: finalStatus,
+      textProcessingCompleted: file.contentType === 'text/plain'
+    }, `Document upload completed${file.contentType === 'text/plain' ? ' with text processing' : ', text processing not applicable'}`);
 
     const totalTime = Date.now() - startTime;
 
@@ -590,22 +639,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       documentId: assetId
     });
 
-    return createResponse(200, {
-      success: true,
-      document: {
-        tenant_id: tenantId,
-        asset_id: assetId,
-        file_name: file.filename,
-        file_size: file.content.length,
-        content_type: file.contentType,
-        status: 'PROCESSED',
-        created_at: now,
-        s3_bucket: bucket,
-        s3_key: key,
-        correlation_id: correlationId,
-      },
-      processing_time: totalTime,
-      message: `Document uploaded successfully.`,
+    return createResponse(201, {
+      assetId: assetId,
+      status: finalStatus,
+      message: file.contentType === 'text/plain' ? 
+        `Document uploaded successfully. Text processing queued asynchronously.` : 
+        `Document uploaded successfully. No processing required for ${file.contentType}.`,
     });
 
   } catch (error) {
