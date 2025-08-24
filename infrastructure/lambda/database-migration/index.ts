@@ -80,10 +80,10 @@ interface Migration {
 }
 
 /**
- * Embedded migration content for critical migrations
- * This ensures Phase 1 can complete even if S3 asset discovery fails
+ * Legacy embedded migrations (deprecated - now using SQL files)
+ * Keeping for backward compatibility but migrations are read from .sql files
  */
-const EMBEDDED_MIGRATIONS: Migration[] = [
+const LEGACY_EMBEDDED_MIGRATIONS: Migration[] = [
   {
     version: '002',
     filename: '002_add_correlation_tracking.sql',
@@ -179,25 +179,30 @@ ON CONFLICT (version) DO NOTHING;`
 ];
 
 /**
- * Get list of migrations from S3 with fallback to embedded migrations
+ * Get list of migrations from local SQL files
  */
 async function getMigrations(): Promise<Migration[]> {
-  // Try new S3 asset system first
-  if (process.env.MIGRATIONS_ASSET_BUCKET && process.env.MIGRATIONS_ASSET_KEY) {
+  const migrations: Migration[] = [];
+  
+  // Read SQL files from local directory (bundled with Lambda)
+  const migrationFiles = ['001_initial_pgvector_schema.sql', '002_add_correlation_tracking.sql', '003_standardize_asset_id_columns.sql'];
+  
+  for (const filename of migrationFiles) {
     try {
-      const s3Migrations = await getMigrationsFromS3();
-      if (s3Migrations.length > 0) {
-        console.log(`Using ${s3Migrations.length} migrations from S3 asset system`);
-        return s3Migrations;
+      const filePath = path.join(__dirname, filename);
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const version = filename.split('_')[0];
+        migrations.push({ version, filename, content });
+        console.log(`Loaded migration ${version} from ${filename}`);
       }
     } catch (error) {
-      console.warn('S3 migration discovery failed, falling back to embedded migrations:', error);
+      console.warn(`Failed to load migration ${filename}:`, error);
     }
   }
-
-  // Fallback to embedded migrations for Phase 1 completion
-  console.log(`Using ${EMBEDDED_MIGRATIONS.length} embedded migrations as fallback`);
-  return EMBEDDED_MIGRATIONS;
+  
+  console.log(`Using ${migrations.length} migrations from SQL files`);
+  return migrations;
 }
 
 /**
