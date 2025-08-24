@@ -10,10 +10,14 @@ interface EmbeddingData {
   avg_content_length: number;
   first_embedding?: string;
   last_embedding?: string;
+  embedding_model?: string;
+  processing_stage?: string;
   chunks?: Array<{
     chunk_index: number;
     content: string;
     created_at: string;
+    word_count?: number;
+    embedding_model?: string;
   }>;
 }
 
@@ -26,6 +30,8 @@ interface PostgreSQLData {
   status?: string;
   error_message?: string;
   created_at?: string;
+  updated_at?: string;
+  correlation_id?: string;
 }
 
 interface AnalysisResponse {
@@ -81,9 +87,11 @@ async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
         total_chunks,
         status,
         error_message,
-        created_at
+        created_at,
+        updated_at,
+        correlation_id
       FROM documents 
-      WHERE asset_id = $1
+      WHERE id = $1
     `;
     
     const result = await pool.query(query, [assetId]);
@@ -102,6 +110,8 @@ async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
       status: row.status,
       error_message: row.error_message,
       created_at: row.created_at,
+      updated_at: row.updated_at,
+      correlation_id: row.correlation_id,
     };
   } catch (error: any) {
     logger.error('getDocumentMetadata', { assetId, error: error.message }, 'Failed to get document metadata');
@@ -120,9 +130,11 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
         COUNT(DISTINCT chunk_index) as unique_chunks,
         AVG(LENGTH(content)) as avg_content_length,
         MIN(created_at) as first_embedding,
-        MAX(created_at) as last_embedding
+        MAX(created_at) as last_embedding,
+        MAX(embedding_model) as embedding_model,
+        MAX(processing_stage) as processing_stage
       FROM document_embeddings 
-      WHERE asset_id = $1
+      WHERE document_id = $1
     `;
     
     const statsResult = await pool.query(statsQuery, [assetId]);
@@ -133,6 +145,8 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
         total_embeddings: 0,
         unique_chunks: 0,
         avg_content_length: 0,
+        embedding_model: undefined,
+        processing_stage: undefined,
       };
     }
     
@@ -141,9 +155,11 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
       SELECT 
         chunk_index,
         content,
-        created_at
+        created_at,
+        chunk_word_count,
+        embedding_model
       FROM document_embeddings 
-      WHERE asset_id = $1
+      WHERE document_id = $1
       ORDER BY chunk_index
       LIMIT 10
     `;
@@ -156,10 +172,14 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
       avg_content_length: parseFloat(stats.avg_content_length) || 0,
       first_embedding: stats.first_embedding,
       last_embedding: stats.last_embedding,
+      embedding_model: stats.embedding_model,
+      processing_stage: stats.processing_stage,
       chunks: chunksResult.rows.map(row => ({
         chunk_index: row.chunk_index,
         content: row.content,
         created_at: row.created_at,
+        word_count: row.chunk_word_count,
+        embedding_model: row.embedding_model,
       })),
     };
   } catch (error: any) {
