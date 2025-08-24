@@ -29,6 +29,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
   public readonly textProcessingLambda: NodejsFunction;
   public readonly documentUploadLambda: NodejsFunction;
   public readonly documentCrudLambda: NodejsFunction;
+  public readonly documentAnalysisLambda: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: RagTimeComputeStackProps) {
     super(scope, id, props);
@@ -55,35 +56,89 @@ export class RagTimeComputeStack extends cdk.NestedStack {
       'Allow HTTPS traffic'
     );
 
-    // Lambda execution role (let CDK auto-generate name to avoid conflicts)
-    const lambdaExecutionRole = new iam.Role(this, 'LambdaExecutionRole', {
-      description: `Lambda execution role for RagTime ${environment} environment (ComputeStack)`,
+    // PHASE 1: Individual Lambda roles to avoid circular dependencies
+    // Each Lambda gets only the permissions it actually needs
+    
+    // 1. Health Check Lambda Role - VPC access only
+    const healthCheckRole = new iam.Role(this, 'HealthCheckRole', {
+      description: `Health check Lambda execution role for ${environment}`,
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
       ],
     });
 
-    // Grant Lambda access to resources
-    documentsBucket.grantReadWrite(lambdaExecutionRole);
-    documentsTable.grantReadWriteData(lambdaExecutionRole);
-    openAISecret.grantRead(lambdaExecutionRole);
-    databaseSecret.grantRead(lambdaExecutionRole);
-    
-    // Grant Lambda access to Aurora cluster
-    lambdaExecutionRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'AuroraConnectPermissions',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'rds-db:connect',
+    // 2. Database Test Lambda Role - Database secret read + VPC access
+    const databaseTestRole = new iam.Role(this, 'DatabaseTestRole', {
+      description: `Database test Lambda execution role for ${environment}`,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
       ],
+    });
+    databaseSecret.grantRead(databaseTestRole);
+
+    // 3. Document CRUD Lambda Role - S3 read + DynamoDB read/write
+    const documentCrudRole = new iam.Role(this, 'DocumentCrudRole', {
+      description: `Document CRUD Lambda execution role for ${environment}`,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+      ],
+    });
+    documentsBucket.grantRead(documentCrudRole);
+    documentsTable.grantReadWriteData(documentCrudRole);
+
+    // 4. Document Analysis Lambda Role - Database secret + cluster access
+    const documentAnalysisRole = new iam.Role(this, 'DocumentAnalysisRole', {
+      description: `Document analysis Lambda execution role for ${environment}`,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+      ],
+    });
+    databaseSecret.grantRead(documentAnalysisRole);
+    documentAnalysisRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'DocumentAnalysisAuroraConnect',
+      effect: iam.Effect.ALLOW,
+      actions: ['rds-db:connect'],
       resources: [
         `arn:aws:rds-db:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:dbuser:${databaseCluster.clusterIdentifier}/ragtime_admin`,
       ],
     }));
-    
-    // Note: KMS permissions for encryption key are granted automatically through
-    // the bucket and secret grants above, avoiding circular dependency
+
+    // PHASE 2: Dependent Lambda roles
+    // 5. Text Processing Lambda Role - S3 + DynamoDB + OpenAI secret + Database access
+    const textProcessingRole = new iam.Role(this, 'TextProcessingRole', {
+      description: `Text processing Lambda execution role for ${environment}`,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+      ],
+    });
+    documentsBucket.grantReadWrite(textProcessingRole);
+    documentsTable.grantReadWriteData(textProcessingRole);
+    openAISecret.grantRead(textProcessingRole);
+    databaseSecret.grantRead(textProcessingRole);
+    textProcessingRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'TextProcessingAuroraConnect',
+      effect: iam.Effect.ALLOW,
+      actions: ['rds-db:connect'],
+      resources: [
+        `arn:aws:rds-db:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:dbuser:${databaseCluster.clusterIdentifier}/ragtime_admin`,
+      ],
+    }));
+
+    // 6. Document Upload Lambda Role - S3 + DynamoDB access
+    const documentUploadRole = new iam.Role(this, 'DocumentUploadRole', {
+      description: `Document upload Lambda execution role for ${environment}`,
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+      ],
+    });
+    documentsBucket.grantReadWrite(documentUploadRole);
+    documentsTable.grantReadWriteData(documentUploadRole);
 
 
     // Health Check Lambda Function (let CDK auto-generate name to avoid conflicts)
@@ -120,7 +175,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
         };
       `),
       timeout: cdk.Duration.seconds(30),
-      role: lambdaExecutionRole,
+      role: healthCheckRole,
       vpc: vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -130,7 +185,7 @@ export class RagTimeComputeStack extends cdk.NestedStack {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
-        OPENAI_SECRET_NAME: openAISecret.secretName,
+        OPENAI_SECRET_NAME: `ragtime-openai-api-key-${environment}`,
         DATABASE_SECRET_NAME: databaseSecret.secretName,
         DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
         DATABASE_NAME: 'ragtime',
@@ -241,7 +296,7 @@ exports.handler = async (event, context) => {
       `),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      role: lambdaExecutionRole,
+      role: databaseTestRole,
       vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -251,7 +306,7 @@ exports.handler = async (event, context) => {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
-        OPENAI_SECRET_NAME: openAISecret.secretName,
+        OPENAI_SECRET_NAME: `ragtime-openai-api-key-${environment}`,
         DATABASE_SECRET_NAME: databaseSecret.secretName,
         DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
         DATABASE_NAME: 'ragtime',
@@ -266,7 +321,7 @@ exports.handler = async (event, context) => {
       entry: path.join(__dirname, '../../../backend/src/lambdas/text-processing/index.ts'),
       timeout: cdk.Duration.minutes(5), // Longer timeout for processing
       memorySize: 1024, // More memory for text processing
-      role: lambdaExecutionRole,
+      role: textProcessingRole,
       vpc: vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -276,7 +331,7 @@ exports.handler = async (event, context) => {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
-        OPENAI_SECRET_NAME: openAISecret.secretName,
+        OPENAI_SECRET_NAME: `ragtime-openai-api-key-${environment}`,
         DATABASE_SECRET_NAME: databaseSecret.secretName,
         DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
         DATABASE_NAME: 'ragtime',
@@ -303,7 +358,7 @@ exports.handler = async (event, context) => {
       entry: path.join(__dirname, '../../../backend/src/lambdas/document-upload/index.ts'),
       timeout: cdk.Duration.minutes(5), // Reduced from 15 minutes
       memorySize: 1024, // Reduced from 2048MB
-      role: lambdaExecutionRole,
+      role: documentUploadRole,
       vpc: vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -313,7 +368,7 @@ exports.handler = async (event, context) => {
         ENVIRONMENT: environment,
         DOCUMENTS_TABLE_NAME: documentsTable.tableName,
         DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
-        // Remove text processing dependencies
+        TEXT_PROCESSING_LAMBDA_NAME: this.textProcessingLambda.functionName,
       },
       bundling: {
         minify: true,
@@ -335,7 +390,7 @@ exports.handler = async (event, context) => {
       entry: path.join(__dirname, '../../../backend/src/lambdas/document-crud/index.ts'),
       timeout: cdk.Duration.minutes(2),
       memorySize: 512,
-      role: lambdaExecutionRole,
+      role: documentCrudRole,
       vpc: vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -357,6 +412,43 @@ exports.handler = async (event, context) => {
         ]
       }
     });
+
+    // Document Analysis Lambda Function
+    this.documentAnalysisLambda = new NodejsFunction(this, 'DocumentAnalysisFunction', {
+      description: 'Document analysis with PostgreSQL and embeddings data',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'handler',
+      entry: path.join(__dirname, '../../../backend/src/lambdas/document-analysis/index.ts'),
+      timeout: cdk.Duration.minutes(2),
+      memorySize: 512,
+      role: documentAnalysisRole,
+      vpc: vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroups: [lambdaSecurityGroup],
+      environment: {
+        ENVIRONMENT: environment,
+        DOCUMENTS_TABLE_NAME: documentsTable.tableName,
+        DOCUMENTS_BUCKET_NAME: documentsBucket.bucketName,
+        DATABASE_SECRET_NAME: databaseSecret.secretName,
+        DATABASE_CLUSTER_ENDPOINT: databaseCluster.clusterEndpoint.hostname,
+        DATABASE_NAME: 'ragtime',
+      },
+      bundling: {
+        minify: false,
+        sourceMap: true,
+        target: 'es2020',
+        externalModules: [
+          '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+        ],
+        // Bundle pg since it's needed for database connections
+      }
+    });
+
+    // PHASE 3: Cross-Lambda Permissions (after all Lambdas exist)
+    // Grant document upload Lambda permission to invoke text processing Lambda
+    this.textProcessingLambda.grantInvoke(documentUploadRole);
 
     // API Gateway REST API (let CDK auto-generate name to avoid conflicts)
     this.api = new apigateway.RestApi(this, 'RagTimeApi', {
@@ -501,6 +593,25 @@ exports.handler = async (event, context) => {
       ],
     });
 
+    // GET /documents/{asset_id}/analysis - Get document analysis (PostgreSQL + embeddings)
+    const documentAnalysisResource = documentDetailResource.addResource('analysis');
+    const documentAnalysisIntegration = new apigateway.LambdaIntegration(this.documentAnalysisLambda, {
+      proxy: true,
+    });
+
+    documentAnalysisResource.addMethod('GET', documentAnalysisIntegration, {
+      methodResponses: [
+        {
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': true,
+            'method.response.header.Access-Control-Allow-Headers': true,
+            'method.response.header.Access-Control-Allow-Methods': true,
+          },
+        },
+      ],
+    });
+
     // Text processing endpoint
     const processResource = this.api.root.addResource('process');
     const textProcessingIntegration = new apigateway.LambdaIntegration(this.textProcessingLambda, {
@@ -554,6 +665,11 @@ exports.handler = async (event, context) => {
     new cdk.CfnOutput(this, 'DocumentCrudEndpoint', {
       value: `${this.api.url}documents/{asset_id}`,
       description: 'Document CRUD endpoint URL (GET/DELETE)',
+    });
+
+    new cdk.CfnOutput(this, 'DocumentAnalysisEndpoint', {
+      value: `${this.api.url}documents/{asset_id}/analysis`,
+      description: 'Document analysis endpoint URL (GET)',
     });
   }
 }

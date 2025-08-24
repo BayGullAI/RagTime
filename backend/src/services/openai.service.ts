@@ -94,7 +94,7 @@ export class OpenAIService {
       throw new Error('Invalid response from OpenAI embeddings API');
     }
 
-    return data.data.map((item: any, _index: number) => ({
+    return data.data.map((item: any, index: number) => ({
       embedding: item.embedding,
       tokens: Math.floor((data.usage?.total_tokens || 0) / texts.length)
     }));

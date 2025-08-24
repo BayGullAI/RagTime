@@ -2,6 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import { createResponse, createErrorResponse } from '../../utils/response.utils';
 import { initializeLogger, StructuredLogger } from '../../utils/structured-logger';
@@ -33,6 +34,7 @@ interface DocumentMetadata {
 
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
 const dynamoClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.AWS_REGION }));
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION });
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const SUPPORTED_CONTENT_TYPES = [
@@ -331,6 +333,104 @@ async function updateDocumentStatus(
   }
 }
 
+async function triggerTextProcessing(
+  file: { filename: string; contentType: string; content: Buffer; },
+  assetId: string,
+  s3Bucket: string,
+  s3Key: string,
+  correlationId: string,
+  logger: StructuredLogger
+): Promise<void> {
+  const processStartTime = Date.now();
+
+  logger.info('TEXT_PROCESSING_START', {
+    documentId: assetId,
+    fileName: file.filename,
+    s3Bucket: s3Bucket,
+    s3Key: s3Key,
+    textProcessingLambda: process.env.TEXT_PROCESSING_LAMBDA_NAME
+  }, `Triggering text processing for ${file.filename}`);
+
+  try {
+    // For text files, use the content directly
+    let textContent: string;
+    if (file.contentType === 'text/plain') {
+      textContent = file.content.toString('utf-8');
+    } else {
+      throw new Error(`Unsupported content type for text processing: ${file.contentType}`);
+    }
+
+    const payload = {
+      text: textContent,
+      documentId: assetId,
+      fileName: file.filename,
+      s3Bucket: s3Bucket,
+      s3Key: s3Key,
+      chunkSize: 1000,
+      chunkOverlap: 200,
+      correlationId: correlationId
+    };
+
+    // Invoke text processing Lambda synchronously (blocking call)
+    const command = new InvokeCommand({
+      FunctionName: process.env.TEXT_PROCESSING_LAMBDA_NAME!,
+      InvocationType: 'RequestResponse', // Synchronous invocation - blocks until completion
+      Payload: JSON.stringify({
+        httpMethod: 'POST',
+        body: JSON.stringify(payload),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': correlationId
+        }
+      }),
+    });
+
+    const response = await lambdaClient.send(command);
+    const processDuration = Date.now() - processStartTime;
+
+    if (response.StatusCode !== 200) {
+      throw new Error(`Text processing Lambda returned status ${response.StatusCode}`);
+    }
+
+    const responsePayload = response.Payload ? JSON.parse(new TextDecoder().decode(response.Payload)) : {};
+    
+    if (responsePayload.statusCode && responsePayload.statusCode !== 200) {
+      const errorMessage = typeof responsePayload.body === 'string' ? 
+        responsePayload.body : 
+        JSON.stringify(responsePayload.body || 'Unknown error');
+      throw new Error(`Text processing failed: ${errorMessage}`);
+    }
+
+    logger.info('TEXT_PROCESSING_SUCCESS', {
+      documentId: assetId,
+      fileName: file.filename,
+      processingDuration: processDuration,
+      lambdaStatusCode: response.StatusCode,
+      chunksGenerated: responsePayload.result?.totalChunks || 0,
+      totalTokens: responsePayload.result?.totalTokens || 0
+    }, `Text processing completed successfully - ${responsePayload.result?.totalChunks || 0} chunks generated`);
+
+    logger.performance('TEXT_PROCESSING', processDuration, {
+      fileName: file.filename,
+      documentId: assetId,
+      textLength: textContent.length,
+      chunksGenerated: responsePayload.result?.totalChunks || 0
+    });
+
+  } catch (error) {
+    const processDuration = Date.now() - processStartTime;
+    logger.logError('TEXT_PROCESSING_FAILED', error as Error, {
+      documentId: assetId,
+      fileName: file.filename,
+      s3Bucket: s3Bucket,
+      s3Key: s3Key,
+      processingDuration: processDuration,
+      textProcessingLambda: process.env.TEXT_PROCESSING_LAMBDA_NAME
+    });
+    throw new Error(`Text processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
 
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -453,8 +553,26 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     // Save metadata to DynamoDB
     await saveDocumentMetadata(documentMetadata, logger);
 
-    // Update status directly to PROCESSED (no text processing)
-    await updateDocumentStatus(tenantId, assetId, 'PROCESSED', logger);
+    // Trigger text processing (this will block until completion)
+    try {
+      await triggerTextProcessing(file, assetId, bucket, key, correlationId, logger);
+      
+      // Only mark as PROCESSED after text processing succeeds
+      await updateDocumentStatus(tenantId, assetId, 'PROCESSED', logger);
+      
+      logger.pipelineStage('TEXT_PROCESSING_PIPELINE_COMPLETE', {
+        documentId: assetId,
+        fileName: file.filename,
+        status: 'PROCESSED'
+      }, 'Text processing pipeline completed successfully');
+      
+    } catch (textProcessingError) {
+      // Mark as FAILED if text processing fails
+      await updateDocumentStatus(tenantId, assetId, 'FAILED', logger, 
+        `Text processing failed: ${textProcessingError instanceof Error ? textProcessingError.message : 'Unknown error'}`);
+      
+      throw textProcessingError;
+    }
 
     const totalTime = Date.now() - startTime;
 
