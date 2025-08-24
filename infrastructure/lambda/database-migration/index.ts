@@ -301,7 +301,7 @@ async function runMigrations(client: Client): Promise<void> {
 }
 
 export const handler: Handler = async (event: CloudFormationEvent) => {
-  console.log('Starting database schema initialization...');
+  console.log('Starting database schema initialization... (Phase 2: DI system complete)');
   console.log('Event:', JSON.stringify(event, null, 2));
   
   try {

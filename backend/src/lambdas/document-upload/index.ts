@@ -6,7 +6,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import { createResponse, createErrorResponse } from '../../utils/response.utils';
 import { initializeLogger, StructuredLogger } from '../../utils/structured-logger';
-// Correlation ID handling is now done by initializeLogger
+// Phase 2: Dependency injection system implemented - correlation ID handling via initializeLogger
 
 interface DocumentMetadata {
   tenant_id: string;
