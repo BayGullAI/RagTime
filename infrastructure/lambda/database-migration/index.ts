@@ -82,42 +82,22 @@ interface Migration {
 // No embedded migrations needed - all migrations are now read from SQL files
 
 /**
- * Get list of migrations from S3 asset system with local fallback
+ * Get list of migrations from S3 asset system
  */
 async function getMigrations(): Promise<Migration[]> {
-  // Try S3 asset system first (production)
-  if (process.env.MIGRATIONS_ASSET_BUCKET && process.env.MIGRATIONS_ASSET_KEY) {
-    try {
-      const s3Migrations = await getMigrationsFromS3();
-      if (s3Migrations.length > 0) {
-        console.log(`Using ${s3Migrations.length} migrations from S3 asset system`);
-        return s3Migrations;
-      }
-    } catch (error) {
-      console.warn('S3 migration loading failed, falling back to local files:', error);
-    }
+  // All migrations must come from S3 - no local copies exist
+  if (!process.env.MIGRATIONS_ASSET_BUCKET || !process.env.MIGRATIONS_ASSET_KEY) {
+    throw new Error('Migration S3 asset environment variables not configured');
   }
 
-  // Fallback to local files (bundled with Lambda)
-  const migrations: Migration[] = [];
-  const migrationFiles = ['001_initial_pgvector_schema.sql', '002_add_correlation_tracking.sql', '003_standardize_asset_id_columns.sql'];
-  
-  for (const filename of migrationFiles) {
-    try {
-      const filePath = path.join(__dirname, filename);
-      if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        const version = filename.split('_')[0];
-        migrations.push({ version, filename, content });
-        console.log(`Loaded migration ${version} from local file ${filename}`);
-      }
-    } catch (error) {
-      console.warn(`Failed to load migration ${filename}:`, error);
-    }
+  try {
+    const s3Migrations = await getMigrationsFromS3();
+    console.log(`Loaded ${s3Migrations.length} migrations from S3 asset system`);
+    return s3Migrations;
+  } catch (error) {
+    console.error('Failed to load migrations from S3:', error);
+    throw new Error(`Migration loading failed: ${error}`);
   }
-  
-  console.log(`Using ${migrations.length} migrations from local files`);
-  return migrations;
 }
 
 /**

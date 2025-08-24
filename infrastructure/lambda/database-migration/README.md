@@ -2,23 +2,25 @@
 
 This directory contains the Lambda function responsible for database schema migrations.
 
-## Migration Files
+## Architecture
 
-The SQL migration files in this directory are **COPIES** from the source directory:
-- **Source of Truth**: `infrastructure/backend/src/migrations/`
-- **Build Copies**: `infrastructure/lambda/database-migration/` (this directory)
+- **Single Source of Truth**: `infrastructure/backend/src/migrations/` contains ALL SQL migration files
+- **No Duplication**: This directory contains ONLY the Lambda function code
+- **CDK Asset System**: Points directly to the source directory for S3 uploads
 
-**Important**: Do not edit SQL files directly in this directory. Edit them in the source directory and copy them here during build.
+## Migration Files Location
 
-## Build Process
-
-Before deploying, copy the latest migrations:
-```bash
-cp infrastructure/backend/src/migrations/*.sql infrastructure/lambda/database-migration/
-```
+- ✅ **Source**: `/infrastructure/backend/src/migrations/*.sql`
+- ❌ **NOT HERE**: No SQL files should exist in this Lambda directory
 
 ## How it Works
 
-1. **S3 Asset System**: CDK uploads all `.sql` files from this directory to S3
-2. **Lambda Runtime**: Function attempts to read from S3 first, falls back to bundled files
-3. **Single Source of Truth**: All migrations originate from `infrastructure/backend/src/migrations/`
+1. **CDK Build**: Uploads SQL files from source directory to S3 as assets
+2. **Lambda Runtime**: Reads migrations from S3 at runtime
+3. **No Duplication**: Zero file copies needed - CDK handles S3 upload directly
+
+## Adding New Migrations
+
+1. Create new `.sql` file in `/infrastructure/backend/src/migrations/`
+2. Deploy with CDK - no manual copying required
+3. Lambda will automatically discover and apply new migrations

@@ -143,8 +143,8 @@ export class RagTimeCoreStack extends cdk.NestedStack {
 
     // Upload all SQL migration files to S3 as a directory asset
     const migrationsAsset = new s3assets.Asset(this, 'MigrationsAsset', {
-      path: path.join(__dirname, '../../lambda/database-migration'),
-      exclude: ['index.ts', 'package.json', '*.js', '*.map'], // Only include .sql files
+      path: path.join(__dirname, '../../backend/src/migrations'),
+      exclude: ['*.js', '*.map', '*.ts'], // Only include .sql files
     });
 
     // Create Lambda function to initialize database schema
