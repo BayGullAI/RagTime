@@ -1,6 +1,16 @@
+/**
+ * Document Analysis Lambda Handler (Phase 4: Standardized error handling)
+ * Updated to use standardized error handling patterns
+ */
+
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { createResponse } from '../../utils/response.utils';
-import { logger } from '../../utils/structured-logger';
+import { createResponse, createApplicationErrorResponse } from '../../utils/response.utils';
+import { initializeLogger } from '../../utils/structured-logger';
+import { CompositionRoot } from '../../container/composition-root';
+import { ServiceTokens } from '../../container/service-container';
+import { ErrorHandler } from '../../interfaces/error-handler.interface';
+import { ValidationError, NotFoundError } from '../../utils/application-error';
+import { createErrorContextFromEvent } from '../../utils/error-context';
 import { Pool } from 'pg';
 import * as AWS from '@aws-sdk/client-secrets-manager';
 
@@ -45,15 +55,13 @@ async function getDatabaseCredentials(): Promise<any> {
     );
     return JSON.parse(response.SecretString!);
   } catch (error: any) {
-    logger.error('getDatabaseCredentials', { error: error.message }, 'Failed to retrieve database credentials');
-    throw error;
+    throw new Error(`Failed to retrieve database credentials: ${error.message}`);
   }
 }
 
-async function getDbPool(): Promise<Pool> {
+async function getPostgreSQLPool(): Promise<Pool> {
   if (!dbPool) {
     const credentials = await getDatabaseCredentials();
-    
     dbPool = new Pool({
       host: process.env.DATABASE_CLUSTER_ENDPOINT,
       port: credentials.port || 5432,
@@ -70,23 +78,12 @@ async function getDbPool(): Promise<Pool> {
 }
 
 async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
-  const pool = await getDbPool();
-  
   try {
-    const query = `
-      SELECT 
-        original_filename,
-        content_type,
-        file_size,
-        total_chunks,
-        status,
-        error_message,
-        created_at
-      FROM documents 
-      WHERE asset_id = $1
-    `;
-    
-    const result = await pool.query(query, [assetId]);
+    const pool = await getPostgreSQLPool();
+    const result = await pool.query(
+      'SELECT * FROM documents WHERE asset_id = $1 LIMIT 1',
+      [assetId]
+    );
     
     if (result.rows.length === 0) {
       return { exists: false };
@@ -104,15 +101,14 @@ async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
       created_at: row.created_at,
     };
   } catch (error: any) {
-    logger.error('getDocumentMetadata', { assetId, error: error.message }, 'Failed to get document metadata');
-    return { exists: false };
+    throw new Error(`Failed to get document metadata for ${assetId}: ${error.message}`);
   }
 }
 
 async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
-  const pool = await getDbPool();
-  
   try {
+    const pool = await getPostgreSQLPool();
+    
     // Get embedding statistics
     const statsQuery = `
       SELECT 
@@ -128,24 +124,13 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
     const statsResult = await pool.query(statsQuery, [assetId]);
     const stats = statsResult.rows[0];
     
-    if (stats.total_embeddings === 0) {
-      return {
-        total_embeddings: 0,
-        unique_chunks: 0,
-        avg_content_length: 0,
-      };
-    }
-    
-    // Get chunk details (limit to 10 for display)
+    // Get sample chunks (first 3)
     const chunksQuery = `
-      SELECT 
-        chunk_index,
-        content,
-        created_at
+      SELECT chunk_index, content, created_at 
       FROM document_embeddings 
-      WHERE asset_id = $1
-      ORDER BY chunk_index
-      LIMIT 10
+      WHERE asset_id = $1 
+      ORDER BY chunk_index 
+      LIMIT 3
     `;
     
     const chunksResult = await pool.query(chunksQuery, [assetId]);
@@ -163,19 +148,17 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
       })),
     };
   } catch (error: any) {
-    logger.error('getDocumentEmbeddings', { assetId, error: error.message }, 'Failed to get document embeddings');
-    return {
-      total_embeddings: 0,
-      unique_chunks: 0,
-      avg_content_length: 0,
-    };
+    throw new Error(`Failed to get document embeddings for ${assetId}: ${error.message}`);
   }
 }
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
-  const correlationId = event.requestContext.requestId;
+  // Initialize logger with correlation ID
+  const logger = initializeLogger(event, 'document-analysis');
+  const correlationId = logger.getCorrelationIdForLambda();
+  
   logger.info('handler', { 
     path: event.path,
     method: event.httpMethod,
@@ -185,16 +168,24 @@ export const handler = async (
   try {
     const assetId = event.pathParameters?.asset_id;
     if (!assetId) {
-      return createResponse(400, { error: 'Asset ID is required' });
+      const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_VALIDATION', correlationId);
+      throw new ValidationError('Asset ID is required', context);
     }
 
     const tenantId = event.queryStringParameters?.tenant_id;
     if (!tenantId) {
-      return createResponse(400, { error: 'tenant_id parameter is required' });
+      const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_VALIDATION', correlationId);
+      throw new ValidationError('tenant_id parameter is required', context);
     }
 
     // Get PostgreSQL document metadata
     const postgresqlData = await getDocumentMetadata(assetId);
+    
+    // Check if document exists
+    if (!postgresqlData.exists) {
+      const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_NOT_FOUND', correlationId);
+      throw new NotFoundError('document', assetId, context);
+    }
     
     // Get embeddings data
     const embeddingsData = await getDocumentEmbeddings(assetId);
@@ -214,12 +205,15 @@ export const handler = async (
 
     return createResponse(200, response);
     
-  } catch (error: any) {
-    logger.error('handler', { 
-      error: error.message, 
-      stack: error.stack,
-      correlationId 
-    }, 'Document analysis failed');
-    return createResponse(500, { error: 'Internal server error' });
+  } catch (error) {
+    // Use standardized error handling
+    const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_PIPELINE', correlationId);
+    
+    const container = CompositionRoot.getContainer();
+    const errorHandler = container.resolve<ErrorHandler>(ServiceTokens.ERROR_HANDLER);
+    const applicationError = errorHandler.handleError(error as Error, context);
+
+    // Return standardized error response
+    return createApplicationErrorResponse(applicationError, true);
   }
 };

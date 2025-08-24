@@ -1,15 +1,11 @@
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-
-export interface EmbeddingResponse {
-  embedding: number[];
-  tokens: number;
-}
+import { IOpenAIService, EmbeddingResponse } from '../interfaces/openai.interface';
 
 export interface OpenAICredentials {
   api_key: string;
 }
 
-export class OpenAIService {
+export class OpenAIService implements IOpenAIService {
   private secretsClient: SecretsManagerClient;
 
   constructor() {

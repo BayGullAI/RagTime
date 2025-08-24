@@ -68,6 +68,7 @@ export class RagTimeStorageStack extends cdk.NestedStack {
     });
 
     // Outputs (no exports to avoid circular dependencies)
+    // Updated to force stack refresh - 2025-08-24
     new cdk.CfnOutput(this, 'DocumentsBucketName', {
       value: this.documentsBucket.bucketName,
       description: 'Name of the documents bucket',

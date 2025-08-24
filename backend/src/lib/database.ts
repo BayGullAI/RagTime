@@ -1,12 +1,8 @@
 import { Client } from 'pg';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import { IDatabaseClient, DatabaseCredentials } from '../interfaces/database.interface';
 
-export interface DatabaseCredentials {
-  username: string;
-  password: string;
-}
-
-export class DatabaseClient {
+export class DatabaseClient implements IDatabaseClient {
   private client: Client | null = null;
   private secretsClient: SecretsManagerClient;
 

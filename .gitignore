@@ -4,3 +4,9 @@ dist/
 cdk.out/
 cdk.context.json
 package-lock.json
+
+# Backup files - use Git history instead
+*-original.*
+*-backup.*
+*.bak
+*.orig
