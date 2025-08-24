@@ -342,8 +342,9 @@ exports.handler = async (event, context) => {
         target: 'es2020',
         externalModules: [
           '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+          'pg-native', // Optional native bindings
         ],
-        // Bundle pg and other dependencies - pg is not available in Lambda runtime
+        // pg module will be bundled since it's required for database connections
       }
     });
 
@@ -376,8 +377,6 @@ exports.handler = async (event, context) => {
         target: 'es2020',
         externalModules: [
           '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
-          'pg-native',
-          'pg'
         ]
       }
     });
@@ -407,8 +406,6 @@ exports.handler = async (event, context) => {
         target: 'es2020',
         externalModules: [
           '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
-          'pg-native',
-          'pg'
         ]
       }
     });
@@ -441,8 +438,9 @@ exports.handler = async (event, context) => {
         target: 'es2020',
         externalModules: [
           '@aws-sdk/*', // AWS SDK v3 modules - available in Node.js 22 runtime
+          'pg-native', // Optional native bindings
         ],
-        // Bundle pg since it's needed for database connections
+        // pg module will be bundled since it's required for database connections
       }
     });
 
