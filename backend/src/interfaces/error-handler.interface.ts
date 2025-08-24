@@ -31,6 +31,7 @@ export interface ErrorContext {
 }
 
 export interface ApplicationError {
+  readonly name: string;
   readonly code: string;
   readonly category: ErrorCategory;
   readonly severity: ErrorSeverity;
@@ -40,6 +41,7 @@ export interface ApplicationError {
   readonly retryable: boolean;
   readonly userMessage?: string;
   readonly originalError?: Error;
+  readonly stack?: string;
 }
 
 export interface ErrorHandler {
