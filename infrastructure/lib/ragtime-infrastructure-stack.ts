@@ -101,7 +101,6 @@ export class RagTimeInfrastructureStack extends cdk.Stack {
       databaseSecret: this.coreStack.databaseSecret,
     });
 
-
     // Nested Stack: Monitoring (CloudWatch Canaries)
     this.monitoringStack = new RagTimeMonitoringStack(this, 'MonitoringStack', {
       environment,

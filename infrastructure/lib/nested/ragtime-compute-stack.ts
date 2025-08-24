@@ -320,7 +320,7 @@ exports.handler = async (event, context) => {
       handler: 'handler',
       entry: path.join(__dirname, '../../../backend/src/lambdas/text-processing/index.ts'),
       timeout: cdk.Duration.minutes(5), // Longer timeout for processing
-      memorySize: 3008, // Increased memory for OpenAI embeddings processing
+      memorySize: 1024, // More memory for text processing
       role: textProcessingRole,
       vpc: vpc,
       vpcSubnets: {
@@ -350,9 +350,9 @@ exports.handler = async (event, context) => {
     // Note: Database schema must be initialized separately before using text processing
     // This Lambda assumes pgvector extension and required tables already exist
 
-    // Document Upload Lambda Function (with text processing integration)
+    // Document Upload Lambda Function (simplified, no text processing dependency)
     this.documentUploadLambda = new NodejsFunction(this, 'DocumentUploadFunction', {
-      description: 'Document upload with text processing pipeline',
+      description: 'Document upload with basic processing',
       runtime: lambda.Runtime.NODEJS_22_X,
       handler: 'handler',
       entry: path.join(__dirname, '../../../backend/src/lambdas/document-upload/index.ts'),
