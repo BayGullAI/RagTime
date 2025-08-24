@@ -11,6 +11,7 @@ import { createErrorContextFromEvent } from '../../utils/error-context';
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
+  // Phase 2: Using DI container architecture
   const startTime = Date.now();
 
   // Initialize structured logger
