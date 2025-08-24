@@ -27,14 +27,6 @@ interface DocumentMetadata {
   gsi2_sk: string; // For status-based queries: created_at#asset_id
 }
 
-interface _ListDocumentsRequest {
-  tenant_id: string;
-  limit?: number;
-  next_token?: string;
-  status?: 'UPLOADED' | 'PROCESSED' | 'FAILED';
-  sort_by?: 'created_at' | 'file_name' | 'file_size';
-  sort_order?: 'asc' | 'desc';
-}
 
 interface ListDocumentsResponse {
   documents: DocumentMetadata[];
