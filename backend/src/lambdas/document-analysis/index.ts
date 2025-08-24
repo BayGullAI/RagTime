@@ -81,7 +81,7 @@ async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
   try {
     const pool = await getPostgreSQLPool();
     const result = await pool.query(
-      'SELECT * FROM documents WHERE asset_id = $1 LIMIT 1',
+      'SELECT * FROM documents WHERE id = $1 LIMIT 1',
       [assetId]
     );
     
@@ -118,7 +118,7 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
         MIN(created_at) as first_embedding,
         MAX(created_at) as last_embedding
       FROM document_embeddings 
-      WHERE asset_id = $1
+      WHERE document_id = $1
     `;
     
     const statsResult = await pool.query(statsQuery, [assetId]);
@@ -128,7 +128,7 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
     const chunksQuery = `
       SELECT chunk_index, content, created_at 
       FROM document_embeddings 
-      WHERE asset_id = $1 
+      WHERE document_id = $1 
       ORDER BY chunk_index 
       LIMIT 3
     `;
