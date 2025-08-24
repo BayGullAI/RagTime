@@ -1,16 +1,6 @@
-/**
- * Document Analysis Lambda Handler (Phase 4: Standardized error handling)
- * Updated to use standardized error handling patterns
- */
-
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { createResponse, createApplicationErrorResponse } from '../../utils/response.utils';
+import { createResponse } from '../../utils/response.utils';
 import { initializeLogger } from '../../utils/structured-logger';
-import { CompositionRoot } from '../../container/composition-root';
-import { ServiceTokens } from '../../container/service-container';
-import { ErrorHandler } from '../../interfaces/error-handler.interface';
-import { ValidationError, NotFoundError } from '../../utils/application-error';
-import { createErrorContextFromEvent } from '../../utils/error-context';
 import { Pool } from 'pg';
 import * as AWS from '@aws-sdk/client-secrets-manager';
 
@@ -59,30 +49,43 @@ async function getDatabaseCredentials(): Promise<any> {
   }
 }
 
-async function getPostgreSQLPool(): Promise<Pool> {
+async function getDbPool(): Promise<Pool> {
   if (!dbPool) {
     const credentials = await getDatabaseCredentials();
+    
     dbPool = new Pool({
       host: process.env.DATABASE_CLUSTER_ENDPOINT,
-      port: 5432,
+      port: credentials.port || 5432,
       database: process.env.DATABASE_NAME || 'ragtime',
       user: credentials.username,
       password: credentials.password,
       ssl: { rejectUnauthorized: false },
       max: 5,
-      connectionTimeoutMillis: 30000,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
     });
   }
   return dbPool;
 }
 
 async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
+  const pool = await getDbPool();
+  
   try {
-    const pool = await getPostgreSQLPool();
-    const result = await pool.query(
-      'SELECT * FROM documents WHERE id = $1 LIMIT 1',
-      [assetId]
-    );
+    const query = `
+      SELECT 
+        original_filename,
+        content_type,
+        file_size,
+        total_chunks,
+        status,
+        error_message,
+        created_at
+      FROM documents 
+      WHERE asset_id = $1
+    `;
+    
+    const result = await pool.query(query, [assetId]);
     
     if (result.rows.length === 0) {
       return { exists: false };
@@ -105,9 +108,9 @@ async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
 }
 
 async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
+  const pool = await getDbPool();
+  
   try {
-    const pool = await getPostgreSQLPool();
-    
     // Get embedding statistics
     const statsQuery = `
       SELECT 
@@ -117,19 +120,30 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
         MIN(created_at) as first_embedding,
         MAX(created_at) as last_embedding
       FROM document_embeddings 
-      WHERE document_id = $1
+      WHERE asset_id = $1
     `;
     
     const statsResult = await pool.query(statsQuery, [assetId]);
     const stats = statsResult.rows[0];
     
-    // Get sample chunks (first 3)
+    if (stats.total_embeddings === 0) {
+      return {
+        total_embeddings: 0,
+        unique_chunks: 0,
+        avg_content_length: 0,
+      };
+    }
+    
+    // Get chunk details (limit to 10 for display)
     const chunksQuery = `
-      SELECT chunk_index, content, created_at 
+      SELECT 
+        chunk_index,
+        content,
+        created_at
       FROM document_embeddings 
-      WHERE document_id = $1 
-      ORDER BY chunk_index 
-      LIMIT 3
+      WHERE asset_id = $1
+      ORDER BY chunk_index
+      LIMIT 10
     `;
     
     const chunksResult = await pool.query(chunksQuery, [assetId]);
@@ -167,24 +181,16 @@ export const handler = async (
   try {
     const assetId = event.pathParameters?.asset_id;
     if (!assetId) {
-      const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_VALIDATION', correlationId);
-      throw new ValidationError('Asset ID is required', context);
+      return createResponse(400, { error: 'Asset ID is required' });
     }
 
     const tenantId = event.queryStringParameters?.tenant_id;
     if (!tenantId) {
-      const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_VALIDATION', correlationId);
-      throw new ValidationError('tenant_id parameter is required', context);
+      return createResponse(400, { error: 'tenant_id parameter is required' });
     }
 
     // Get PostgreSQL document metadata
     const postgresqlData = await getDocumentMetadata(assetId);
-    
-    // Check if document exists
-    if (!postgresqlData.exists) {
-      const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_NOT_FOUND', correlationId);
-      throw new NotFoundError('document', assetId, context);
-    }
     
     // Get embeddings data
     const embeddingsData = await getDocumentEmbeddings(assetId);
@@ -204,15 +210,12 @@ export const handler = async (
 
     return createResponse(200, response);
     
-  } catch (error) {
-    // Use standardized error handling
-    const context = createErrorContextFromEvent(event, 'DOCUMENT_ANALYSIS_PIPELINE', correlationId);
-    
-    const container = CompositionRoot.getContainer();
-    const errorHandler = container.resolve<ErrorHandler>(ServiceTokens.ERROR_HANDLER);
-    const applicationError = errorHandler.handleError(error as Error, context);
-
-    // Return standardized error response
-    return createApplicationErrorResponse(applicationError, true);
+  } catch (error: any) {
+    logger.error('handler', { 
+      error: error.message, 
+      stack: error.stack,
+      correlationId 
+    }, 'Document analysis failed');
+    return createResponse(500, { error: 'Internal server error' });
   }
 };

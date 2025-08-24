@@ -71,5 +71,6 @@ export const ServiceTokens = {
   OPENAI_SERVICE: 'IOpenAIService',
   DOCUMENT_SERVICE: 'IDocumentService', 
   TEXT_PROCESSING_SERVICE: 'ITextProcessingService',
-  ERROR_HANDLER: 'IErrorHandler'
+  ERROR_HANDLER: 'IErrorHandler',
+  DOCUMENT_UPLOAD_SERVICE: 'IDocumentUploadService'
 } as const;

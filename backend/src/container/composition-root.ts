@@ -9,11 +9,13 @@ import { OpenAIService } from '../services/openai.service';
 import { DocumentService } from '../services/document.service';
 import { TextProcessingService } from '../services/text-processing.service';
 import { ErrorHandlerService } from '../services/error-handler.service';
+import { DocumentUploadService } from '../services/document-upload.service';
 import { IDatabaseClient } from '../interfaces/database.interface';
 import { IOpenAIService } from '../interfaces/openai.interface';
 import { IDocumentService } from '../interfaces/document.interface';
 import { ITextProcessingService } from '../interfaces/text-processing.interface';
 import { ErrorHandler } from '../interfaces/error-handler.interface';
+import { IDocumentUploadService } from '../interfaces/document-upload.interface';
 import { initializeLogger } from '../utils/structured-logger';
 
 export class CompositionRoot {
@@ -77,6 +79,17 @@ export class CompositionRoot {
         return new ErrorHandlerService(logger);
       },
       'singleton'
+    );
+
+    // Register document upload service as transient with logger
+    container.register<IDocumentUploadService>(
+      ServiceTokens.DOCUMENT_UPLOAD_SERVICE,
+      () => {
+        // Create a default logger for document upload service
+        const logger = initializeLogger({ httpMethod: 'POST', headers: {} }, 'document-upload-service');
+        return new DocumentUploadService(logger);
+      },
+      'transient' // Transient to get fresh logger instance per request
     );
 
     return container;
