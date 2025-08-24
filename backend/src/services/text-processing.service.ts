@@ -1,41 +1,19 @@
-import { OpenAIService } from './openai.service';
-import { DocumentService } from './document.service';
+import { IOpenAIService } from '../interfaces/openai.interface';
+import { IDocumentService } from '../interfaces/document.interface';
+import { 
+  ITextProcessingService,
+  TextChunk,
+  ProcessDocumentRequest,
+  ProcessDocumentResult
+} from '../interfaces/text-processing.interface';
 
-export interface TextChunk {
-  index: number;
-  content: string;
-  startChar: number;
-  endChar: number;
-}
+export class TextProcessingService implements ITextProcessingService {
+  private openAIService: IOpenAIService;
+  private documentService: IDocumentService;
 
-export interface ProcessDocumentRequest {
-  text: string;
-  documentId: string;
-  chunkSize?: number;
-  chunkOverlap?: number;
-  correlationId?: string;
-  embeddingModel?: string;
-}
-
-export interface ProcessDocumentResult {
-  documentId: string;
-  totalChunks: number;
-  chunks: Array<{
-    index: number;
-    content: string;
-    embedding: number[];
-    tokens: number;
-  }>;
-  totalTokens: number;
-}
-
-export class TextProcessingService {
-  private openAIService: OpenAIService;
-  private documentService: DocumentService;
-
-  constructor(openAIService: OpenAIService) {
+  constructor(openAIService: IOpenAIService, documentService: IDocumentService) {
     this.openAIService = openAIService;
-    this.documentService = new DocumentService();
+    this.documentService = documentService;
   }
 
   /**

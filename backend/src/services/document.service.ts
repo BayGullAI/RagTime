@@ -1,26 +1,15 @@
-import { DatabaseClient } from '../lib/database';
+import { IDatabaseClient } from '../interfaces/database.interface';
+import { 
+  IDocumentService, 
+  DocumentEmbedding, 
+  SimilaritySearchResult 
+} from '../interfaces/document.interface';
 
-export interface DocumentEmbedding {
-  documentId: string;
-  chunkIndex: number;
-  content: string;
-  embedding: number[];
-  metadata?: any;
-}
+export class DocumentService implements IDocumentService {
+  private db: IDatabaseClient;
 
-export interface SimilaritySearchResult {
-  documentId: string;
-  chunkIndex: number;
-  content: string;
-  similarity: number;
-  metadata?: any;
-}
-
-export class DocumentService {
-  private db: DatabaseClient;
-
-  constructor() {
-    this.db = new DatabaseClient();
+  constructor(databaseClient: IDatabaseClient) {
+    this.db = databaseClient;
   }
 
   /**

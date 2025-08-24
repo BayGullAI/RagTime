@@ -1,9 +1,9 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { createResponse } from '../../utils/response.utils';
-import { TextProcessingService } from '../../services/text-processing.service';
-import { OpenAIService } from '../../services/openai.service';
 import { initializeLogger } from '../../utils/structured-logger';
-// Correlation ID handling is now done by initializeLogger
+import { CompositionRoot } from '../../container/composition-root';
+import { ServiceTokens } from '../../container/service-container';
+import { ITextProcessingService } from '../../interfaces/text-processing.interface';
 
 export const handler = async (
   event: APIGatewayProxyEvent
@@ -55,9 +55,11 @@ export const handler = async (
       s3Key: s3Key || null
     }, `Content analysis completed`);
 
-    // Initialize services
-    const openAIService = new OpenAIService();
-    const textProcessingService = new TextProcessingService(openAIService);
+    // Get service from DI container
+    const container = CompositionRoot.getContainer();
+    const textProcessingService = container.resolve<ITextProcessingService>(
+      ServiceTokens.TEXT_PROCESSING_SERVICE
+    );
 
     logger.info('CHUNKING_START', {
       documentId: documentId,
