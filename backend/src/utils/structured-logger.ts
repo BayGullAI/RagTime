@@ -5,6 +5,8 @@
  * for the entire document processing pipeline.
  */
 
+import { extractCorrelationIdFromEvent, generateCorrelationId } from './correlation';
+
 export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
 export interface LogEntry {
@@ -26,76 +28,28 @@ export interface LoggerOptions {
 export class StructuredLogger {
   private service: string;
   private enableDebug: boolean;
-  private correlationIdHeader: string;
+  private correlationId: string;
 
-  constructor(options: LoggerOptions = {}) {
+  constructor(correlationId: string, options: LoggerOptions = {}) {
+    this.correlationId = correlationId;
     this.service = options.service || process.env.SERVICE_NAME || 'unknown';
     this.enableDebug = options.enableDebug || process.env.LOG_LEVEL === 'DEBUG';
-    this.correlationIdHeader = options.correlationIdHeader || process.env.CORRELATION_HEADER_NAME || 'X-Correlation-ID';
   }
 
   /**
-   * Get correlation ID from various sources
+   * Get correlation ID (now explicit, no global state)
    */
   private getCorrelationId(): string {
-    // Try to get from environment variable (set by Lambda context)
-    if (process.env.CORRELATION_ID) {
-      return process.env.CORRELATION_ID;
-    }
-
-    // Try to get from global context (set by request handler)
-    if ((global as any).correlationId) {
-      return (global as any).correlationId;
-    }
-
-    // Generate a new correlation ID if not found
-    const timestamp = new Date().toISOString().replace(/[-:]/g, '').substring(0, 15);
-    const randomId = Math.random().toString(36).substring(2, 8);
-    return `AUTO-${timestamp}-${randomId}`;
+    return this.correlationId;
   }
 
   /**
-   * Set correlation ID for the current execution context
+   * Public getter for correlation ID
    */
-  public setCorrelationId(correlationId: string): void {
-    process.env.CORRELATION_ID = correlationId;
-    (global as any).correlationId = correlationId;
+  public getCorrelationIdForLambda(): string {
+    return this.correlationId;
   }
 
-  /**
-   * Extract correlation ID from event (API Gateway, Lambda trigger, etc.)
-   */
-  public extractCorrelationId(event: any): string {
-    let correlationId: string | null = null;
-
-    // API Gateway event
-    if (event.headers && event.headers[this.correlationIdHeader]) {
-      correlationId = event.headers[this.correlationIdHeader];
-    }
-
-    // Direct Lambda invocation
-    if (event.correlationId) {
-      correlationId = event.correlationId;
-    }
-
-    // SNS/SQS message attributes
-    if (event.Records && event.Records[0] && event.Records[0].messageAttributes) {
-      const messageAttributes = event.Records[0].messageAttributes;
-      if (messageAttributes[this.correlationIdHeader]) {
-        correlationId = messageAttributes[this.correlationIdHeader].stringValue;
-      }
-    }
-
-    // If no correlation ID found, generate one
-    if (!correlationId) {
-      const timestamp = new Date().toISOString().replace(/[-:]/g, '').substring(0, 15);
-      const randomId = Math.random().toString(36).substring(2, 8);
-      correlationId = `GEN-${timestamp}-${randomId}`;
-    }
-
-    this.setCorrelationId(correlationId);
-    return correlationId;
-  }
 
   private log(level: LogLevel, operation: string, data: Record<string, any>, message: string): void {
     // Skip debug logs if not enabled
@@ -229,14 +183,15 @@ export class ChildLogger {
   }
 }
 
-// Default logger instance
-export const logger = new StructuredLogger();
+// Note: Default logger instance removed - correlation ID now required
 
 /**
  * Initialize logger for a Lambda function
  */
 export function initializeLogger(event: any, serviceName?: string): StructuredLogger {
-  const loggerInstance = new StructuredLogger({ service: serviceName });
-  loggerInstance.extractCorrelationId(event);
-  return loggerInstance;
+  let correlationId = extractCorrelationIdFromEvent(event);
+  if (!correlationId) {
+    correlationId = generateCorrelationId('AUTO');
+  }
+  return new StructuredLogger(correlationId, { service: serviceName });
 }

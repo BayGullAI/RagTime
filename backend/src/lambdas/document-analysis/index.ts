@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { createResponse } from '../../utils/response.utils';
-import { logger } from '../../utils/structured-logger';
+import { initializeLogger } from '../../utils/structured-logger';
 import { Pool } from 'pg';
 import * as AWS from '@aws-sdk/client-secrets-manager';
 
@@ -45,8 +45,7 @@ async function getDatabaseCredentials(): Promise<any> {
     );
     return JSON.parse(response.SecretString!);
   } catch (error: any) {
-    logger.error('getDatabaseCredentials', { error: error.message }, 'Failed to retrieve database credentials');
-    throw error;
+    throw new Error(`Failed to retrieve database credentials: ${error.message}`);
   }
 }
 
@@ -104,8 +103,7 @@ async function getDocumentMetadata(assetId: string): Promise<PostgreSQLData> {
       created_at: row.created_at,
     };
   } catch (error: any) {
-    logger.error('getDocumentMetadata', { assetId, error: error.message }, 'Failed to get document metadata');
-    return { exists: false };
+    throw new Error(`Failed to get document metadata for ${assetId}: ${error.message}`);
   }
 }
 
@@ -163,19 +161,17 @@ async function getDocumentEmbeddings(assetId: string): Promise<EmbeddingData> {
       })),
     };
   } catch (error: any) {
-    logger.error('getDocumentEmbeddings', { assetId, error: error.message }, 'Failed to get document embeddings');
-    return {
-      total_embeddings: 0,
-      unique_chunks: 0,
-      avg_content_length: 0,
-    };
+    throw new Error(`Failed to get document embeddings for ${assetId}: ${error.message}`);
   }
 }
 
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
-  const correlationId = event.requestContext.requestId;
+  // Initialize logger with correlation ID
+  const logger = initializeLogger(event, 'document-analysis');
+  const correlationId = logger.getCorrelationIdForLambda();
+  
   logger.info('handler', { 
     path: event.path,
     method: event.httpMethod,

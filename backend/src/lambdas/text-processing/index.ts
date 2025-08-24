@@ -3,10 +3,7 @@ import { createResponse } from '../../utils/response.utils';
 import { TextProcessingService } from '../../services/text-processing.service';
 import { OpenAIService } from '../../services/openai.service';
 import { initializeLogger } from '../../utils/structured-logger';
-import { 
-  generateCorrelationId, 
-  extractCorrelationIdFromEvent 
-} from '../../utils/correlation';
+// Correlation ID handling is now done by initializeLogger
 
 export const handler = async (
   event: APIGatewayProxyEvent
@@ -16,12 +13,8 @@ export const handler = async (
   // Initialize structured logger
   const logger = initializeLogger(event, 'text-processing');
 
-  // Extract or generate correlation ID
-  let correlationId = extractCorrelationIdFromEvent(event);
-  if (!correlationId) {
-    correlationId = generateCorrelationId('PROC');
-    logger.setCorrelationId(correlationId);
-  }
+  // Get correlation ID from logger (already extracted/generated)
+  const correlationId = logger.getCorrelationIdForLambda();
 
   logger.pipelineStage('PROCESSING_START', {
     httpMethod: event.httpMethod,

@@ -6,10 +6,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import { createResponse, createErrorResponse } from '../../utils/response.utils';
 import { initializeLogger, StructuredLogger } from '../../utils/structured-logger';
-import { 
-  generateCorrelationId, 
-  extractCorrelationIdFromEvent
-} from '../../utils/correlation';
+// Correlation ID handling is now done by initializeLogger
 
 interface DocumentMetadata {
   tenant_id: string;
@@ -438,15 +435,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   let assetId: string | undefined;
   let tenantId: string | undefined;
 
-  // Initialize structured logger
+  // Initialize structured logger with correlation ID
   const logger = initializeLogger(event, 'document-upload');
-
-  // Extract or generate correlation ID
-  let correlationId = extractCorrelationIdFromEvent(event);
-  if (!correlationId) {
-    correlationId = generateCorrelationId('UPLOAD');
-    logger.setCorrelationId(correlationId);
-  }
+  
+  // Get correlation ID from logger (already extracted/generated)
+  const correlationId = logger.getCorrelationIdForLambda();
 
   logger.pipelineStage('UPLOAD_START', {
     httpMethod: event.httpMethod,
